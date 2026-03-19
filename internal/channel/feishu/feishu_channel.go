@@ -3,132 +3,227 @@ package feishu
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"sync"
-	"time"
 
-	"github.com/gorilla/websocket"
+	lark "github.com/larksuite/oapi-sdk-go/v3"
+	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
+	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
+	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
+	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
+
 	"github.com/user/feishu-ai-assistant/internal/channel"
 	"github.com/user/feishu-ai-assistant/internal/config"
 )
 
+// Channel implements channel.Channel using the official Feishu SDK with WebSocket long connection.
 type Channel struct {
-	cfg      config.ChannelConfig
-	tokenMgr *TokenManager
-	conn     *websocket.Conn
-	handler  channel.MessageHandler
-	status   channel.ChannelStatus
-	mu       sync.RWMutex
-	stopChan chan struct{}
-	seen     sync.Map
+	cfg       config.ChannelConfig
+	apiClient *lark.Client
+	wsClient  *larkws.Client
+	handler   channel.MessageHandler
+	status    channel.ChannelStatus
+	mu        sync.RWMutex
+	stopChan  chan struct{}
 }
 
 func New(cfg config.ChannelConfig) *Channel {
-	return &Channel{cfg: cfg, tokenMgr: NewTokenManager(cfg.AppID, cfg.AppSecret), stopChan: make(chan struct{})}
+	return &Channel{
+		cfg:      cfg,
+		stopChan: make(chan struct{}),
+	}
 }
 
 func (c *Channel) Connect(ctx context.Context) error {
 	c.mu.Lock()
 	c.status = channel.StatusConnecting
 	c.mu.Unlock()
-	log.Printf("[feishu] connecting to %s", c.cfg.WSEndpoint)
-	c.tokenMgr.GetToken()
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, c.cfg.WSEndpoint, nil)
-	if err != nil {
+
+	log.Printf("[feishu] connecting via official SDK (app_id: %s)", c.cfg.AppID)
+
+	// Create API client for sending messages
+	c.apiClient = lark.NewClient(c.cfg.AppID, c.cfg.AppSecret,
+		lark.WithLogLevel(larkcore.LogLevelInfo),
+		lark.WithEnableTokenCache(true),
+	)
+
+	// Create event dispatcher — empty strings for long connection mode
+	eventHandler := dispatcher.NewEventDispatcher("", "").
+		OnP2MessageReceiveV1(func(ctx context.Context, event *larkim.P2MessageReceiveV1) error {
+			c.handleMessageEvent(event)
+			return nil
+		})
+
+	// Create WebSocket long connection client
+	c.wsClient = larkws.NewClient(c.cfg.AppID, c.cfg.AppSecret,
+		larkws.WithEventHandler(eventHandler),
+		larkws.WithLogLevel(larkcore.LogLevelInfo),
+	)
+
+	// Start WebSocket client in a goroutine (cli.Start blocks)
+	go func() {
 		c.mu.Lock()
-		c.status = channel.StatusDisconnected
+		c.status = channel.StatusConnected
 		c.mu.Unlock()
-		return err
-	}
-	c.mu.Lock()
-	c.conn = conn
-	c.status = channel.StatusConnected
-	c.mu.Unlock()
-	log.Println("[feishu] connected")
-	go c.readLoop()
+		log.Println("[feishu] SDK WebSocket client starting...")
+
+		err := c.wsClient.Start(ctx)
+		if err != nil {
+			log.Printf("[feishu] SDK WebSocket error: %v", err)
+			c.mu.Lock()
+			c.status = channel.StatusDisconnected
+			c.mu.Unlock()
+		}
+	}()
+
 	return nil
+}
+
+func (c *Channel) handleMessageEvent(event *larkim.P2MessageReceiveV1) {
+	if c.handler == nil {
+		return
+	}
+
+	ev := event.Event
+	if ev == nil || ev.Message == nil {
+		return
+	}
+
+	// Parse text content from message
+	content := ""
+	if ev.Message.Content != nil {
+		var tc struct {
+			Text string `json:"text"`
+		}
+		json.Unmarshal([]byte(*ev.Message.Content), &tc)
+		content = tc.Text
+	}
+	if content == "" {
+		return
+	}
+
+	// Determine if bot is mentioned
+	mentionBot := false
+	if ev.Message.Mentions != nil && len(ev.Message.Mentions) > 0 {
+		mentionBot = true
+	}
+
+	// Extract fields safely
+	userID := ""
+	if ev.Sender != nil && ev.Sender.SenderId != nil && ev.Sender.SenderId.OpenId != nil {
+		userID = *ev.Sender.SenderId.OpenId
+	}
+	userName := ""
+	if ev.Sender != nil && ev.Sender.SenderType != nil {
+		userName = *ev.Sender.SenderType
+	}
+	chatID := ""
+	if ev.Message.ChatId != nil {
+		chatID = *ev.Message.ChatId
+	}
+	chatType := ""
+	if ev.Message.ChatType != nil {
+		chatType = *ev.Message.ChatType
+	}
+	messageID := ""
+	if ev.Message.MessageId != nil {
+		messageID = *ev.Message.MessageId
+	}
+	messageType := ""
+	if ev.Message.MessageType != nil {
+		messageType = *ev.Message.MessageType
+	}
+
+	msg := channel.ChannelMessage{
+		Platform:    "feishu",
+		UserID:      userID,
+		UserName:    userName,
+		ChatID:      chatID,
+		ChatType:    chatType,
+		MessageID:   messageID,
+		MessageType: messageType,
+		Content:     content,
+		MentionBot:  mentionBot,
+		RawEvent:    event,
+	}
+
+	log.Printf("[feishu] received message from %s in %s: %s", userID, chatID, truncate(content, 50))
+	c.handler(msg)
 }
 
 func (c *Channel) Disconnect() error {
 	close(c.stopChan)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.conn != nil {
-		c.conn.Close()
-	}
 	c.status = channel.StatusDisconnected
+	log.Println("[feishu] disconnected")
 	return nil
 }
 
 func (c *Channel) Reconnect(ctx context.Context) error {
-	c.mu.Lock()
-	c.status = channel.StatusReconnecting
-	if c.conn != nil { c.conn.Close() }
-	c.mu.Unlock()
-	for i := 0; i < 10; i++ {
-		wait := time.Duration(1<<uint(i)) * time.Second
-		if wait > 60*time.Second { wait = 60 * time.Second }
-		time.Sleep(wait)
-		if err := c.Connect(ctx); err == nil {
-			return nil
-		}
-	}
+	// SDK handles reconnection automatically
+	log.Println("[feishu] reconnect requested (SDK handles this automatically)")
 	return nil
 }
 
 func (c *Channel) OnMessage(h channel.MessageHandler) { c.handler = h }
 
 func (c *Channel) SendReply(ctx context.Context, reply channel.ReplyMessage) error {
-	token, err := c.tokenMgr.GetToken()
-	if err != nil {
-		return err
+	if c.apiClient == nil {
+		return fmt.Errorf("feishu API client not initialized")
 	}
+
+	var msgType, content string
 	if reply.ContentType == "markdown" {
-		return SendMarkdownMessage(token, reply.ChatID, reply.Content)
+		msgType = "interactive"
+		card, _ := json.Marshal(map[string]interface{}{
+			"elements": []map[string]interface{}{
+				{"tag": "markdown", "content": reply.Content},
+			},
+		})
+		content = string(card)
+	} else {
+		msgType = "text"
+		content = fmt.Sprintf(`{"text":"%s"}`, jsonEscape(reply.Content))
 	}
-	return SendTextMessage(token, reply.ChatID, reply.Content)
+
+	resp, err := c.apiClient.Im.Message.Create(ctx, larkim.NewCreateMessageReqBuilder().
+		ReceiveIdType(larkim.ReceiveIdTypeChatId).
+		Body(larkim.NewCreateMessageReqBodyBuilder().
+			ReceiveId(reply.ChatID).
+			MsgType(msgType).
+			Content(content).
+			Build()).
+		Build())
+
+	if err != nil {
+		return fmt.Errorf("send message: %w", err)
+	}
+	if !resp.Success() {
+		return fmt.Errorf("send message error: code=%d msg=%s", resp.Code, resp.Msg)
+	}
+
+	log.Printf("[feishu] reply sent to %s", reply.ChatID)
+	return nil
 }
 
 func (c *Channel) Type() string { return "feishu" }
+
 func (c *Channel) Status() channel.ChannelStatus {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.status
 }
 
-func (c *Channel) readLoop() {
-	for {
-		select {
-		case <-c.stopChan:
-			return
-		default:
-		}
-		_, data, err := c.conn.ReadMessage()
-		if err != nil {
-			go c.Reconnect(context.Background())
-			return
-		}
-		var hdr struct {
-		Header struct {
-			EventID   string `json:"event_id"`
-			EventType string `json:"event_type"`
-		} `json:"header"`
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
 	}
-		json.Unmarshal(data, &hdr)
-		if hdr.Header.EventID != "" {
-			if _, dup := c.seen.LoadOrStore(hdr.Header.EventID, true); dup {
-				continue
-			}
-		}
-		if hdr.Header.EventType != "im.message.receive_v1" {
-			continue
-		}
-		msg, err := ParseEvent(data)
-		if err != nil || msg.Content == "" {
-			continue
-		}
-		if c.handler != nil {
-			c.handler(*msg)
-		}
-	}
+	return s[:n] + "..."
+}
+
+func jsonEscape(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b[1 : len(b)-1])
 }

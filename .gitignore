@@ -9,3 +9,4 @@ Thumbs.db
 vendor/
 .env
 *.env.local
+.feishu-ai-assistant.pid

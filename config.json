@@ -1,5 +1,6 @@
 {
   "agent": {
+    "anthropic_api_key": "ENC:rjrG91UDsJgq3bDgD0atSIo+UdP1u9WlutGeqcxwGdqP+xrtPL9rF8P+wVlpcHFxuLHBgrGu5h3Uzx47eeJImDCPtpFw8a2rn5cjfIGgIQ==",
     "bash": {
       "allowed_commands": [
         "ls",
@@ -54,6 +55,7 @@
       "network": false,
       "timeout": "30s"
     },
+    "claude_api_key": "ENC:u/BAOXqNPvD9nZb9UomtRNAtp3gvQ5LROaK9RAm+GWUxyN1yGaU3mQY9YPg4rjNUtGbn8VkvZTCfpAPSM8xGMIa1Yy5GthyBjWwy544jeg==",
     "claude_cli_args": [
       "--print",
       "--output-format",
@@ -76,8 +78,8 @@
       "enabled": false
     },
     "feishu": {
-      "app_id": "",
-      "app_secret": "",
+      "app_id": "ENC:xO2dsbjvuRCHHzxTDMtzlT1TS3/gQAy7d2HZOUc37sAuMk2XGA9i7l2zMEFwPnR8",
+      "app_secret": "ENC:6sXJWConrf2FVGHeGFgZoY2wxZhaZsRZRJg6EJvs+gV4LbNNLI1cKW1iXUlNG1+BAiIq/ILFYJW9yHS6",
       "enabled": true,
       "ws_endpoint": "wss://open.feishu.cn/event/ws"
     },
