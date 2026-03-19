@@ -1,0 +1,47 @@
+{
+  "gateway": {
+    "host": "127.0.0.1",
+    "port": 18789,
+    "max_sessions": 200,
+    "session_ttl": "30m",
+    "context_compress_threshold": 0.8
+  },
+  "channels": {
+    "feishu": {
+      "enabled": true,
+      "app_id": "",
+      "app_secret": "",
+      "ws_endpoint": "wss://open.feishu.cn/event/ws"
+    },
+    "telegram": { "enabled": false, "bot_token": "" },
+    "discord": { "enabled": false, "bot_token": "" },
+    "dingtalk": { "enabled": false, "app_key": "", "app_secret": "" }
+  },
+  "agent": {
+    "claude_cli_path": "claude",
+    "claude_cli_args": ["--print", "--output-format", "json"],
+    "timeout": "120s",
+    "max_retries": 3,
+    "max_concurrent_per_agent": 5,
+    "workspace_root": "./workspace",
+    "bash": {
+      "timeout": "30s",
+      "max_output": "1MB",
+      "network": false,
+      "blocked_commands": ["curl","wget","nc","ncat","sudo","su","dd","mkfs","fdisk","chmod","chown"],
+      "blocked_patterns": ["python.* -c","python.* -e","node.* -e","ruby.* -e","bash -c","sh -c","/dev/tcp","eval ","exec "],
+      "allowed_commands": ["ls","cat","head","tail","wc","file","grep","find","which","echo","printf","date","mkdir","cp","mv","git status","git log","git diff","git show","go build","go test","go vet","go fmt"]
+    }
+  },
+  "memory": {
+    "compaction": {
+      "enabled": true,
+      "schedule": "0 3 * * *",
+      "expire_overridden_days": 30,
+      "summarize_threshold": 20,
+      "max_file_size": "50KB"
+    }
+  },
+  "logging": { "level": "info", "format": "json", "output": "stdout" },
+  "health": { "enabled": true, "endpoint": "/health", "port": 18790 }
+}

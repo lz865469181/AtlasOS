@@ -1,0 +1,11 @@
+*.exe
+bin/
+workspace/
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+vendor/
+.env
+*.env.local
