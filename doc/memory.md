@@ -202,3 +202,38 @@ Browser (localhost:18791)
 |  GET  /api/status    -> system info  |
 +--------------------------------------+
 ```
+
+---
+
+## Change History
+
+### 2026-03-19 — Initial WebUI implementation (`15ff4c5`)
+
+**Created files:**
+- `internal/webui/secrets.go` — Cross-platform persistent env var management (setx/profile)
+- `internal/webui/server.go` — HTTP server, API handlers, CSRF, localhost-only middleware
+- `internal/webui/static.go` — go:embed directive for static files
+- `internal/webui/static/index.html` — SPA with 3 tabs (Config/Secrets/Status), raw JSON textarea editor
+- `internal/webui/server_test.go` — 13 tests covering all endpoints + security
+- `doc/memory.md` — This file
+
+**Modified files:**
+- `internal/config/config.go` — Added `WebUIConfig` struct + `WebUI` field + default port 18791
+- `config.json` — Added `"webui": {"enabled": true, "port": 18791}`
+- `cmd/server/main.go` — Import webui, start on boot (step 8), graceful shutdown
+
+### 2026-03-19 — Tree editor upgrade (`6e76aff`)
+
+**Modified files:**
+- `internal/webui/static/index.html` — Replaced raw JSON textarea with hierarchical tree editor:
+  - Collapsible sections with emoji icons per section (🌐 gateway, 📡 channels, 🤖 agent, 💾 memory, 📝 logging, ❤ health, 🖥 webui)
+  - Nested sub-sections (channels → feishu/telegram/discord/dingtalk, agent → bash, memory → compaction)
+  - Type-aware field inputs: `string` → text input, `number` → number spinner, `boolean` → dropdown, `array` → tag chips with ×/+ controls
+  - Secret fields (containing `secret`/`token`/`password`/`api_key`/`apikey`) highlighted in orange
+  - "Raw JSON" toggle button to switch between tree view and raw textarea
+  - Bidirectional sync: `collectTreeValues()` gathers all tree inputs back into `configData` object before save
+  - `setNestedValue(obj, path, value)` helper for deep path assignment
+  - `buildSection()` / `buildField()` / `buildArrayEditor()` / `makeTag()` render functions
+  - Section icons map: `SECTION_ICONS` object
+  - CSS additions: `.tree-section`, `.tree-header`, `.tree-arrow`, `.tree-field`, `.tree-field-key`, `.tree-field-value`, `.tree-array-tag`, `.tree-array-wrap`, `.tree-add-tag` classes
+- `doc/memory.md` — Updated Configuration tab description
