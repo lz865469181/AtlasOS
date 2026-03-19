@@ -32,7 +32,7 @@ Cross-platform persistent environment variable management.
 Single-page application with embedded CSS/JS. Dark theme UI.
 
 - **3 tabs**: Configuration, Secrets, Status
-- **Configuration tab**: JSON textarea editor with save/revert buttons
+- **Configuration tab**: Hierarchical tree editor with collapsible sections, per-field type-aware inputs (string/number/bool/array), secret fields highlighted in orange, array fields as tag chips with add/remove, "Raw JSON" toggle for fallback editing
 - **Secrets tab**: Lists all known env keys with masked values, SET/NOT SET badges, remove buttons; form to set new secrets
 - **Status tab**: Grid display of system info (uptime, config path, platform, etc.)
 - CSRF: reads `csrf_token` cookie, sends as `X-CSRF-Token` header on POST/DELETE

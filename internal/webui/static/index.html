@@ -53,6 +53,39 @@
   .form-group input:focus, .form-group textarea:focus { border-color: var(--accent); }
   .form-group textarea { min-height: 200px; font-family: 'Cascadia Code', 'Fira Code', monospace; font-size:13px; resize:vertical; }
 
+  /* Tree config editor */
+  .tree-section { margin-bottom: 4px; }
+  .tree-header { display:flex; align-items:center; gap:8px; padding:8px 12px; cursor:pointer; border-radius: var(--radius); transition: background .1s; user-select:none; }
+  .tree-header:hover { background: var(--surface2); }
+  .tree-arrow { font-size:10px; color: var(--text2); transition: transform .15s; width:14px; text-align:center; flex-shrink:0; }
+  .tree-arrow.open { transform: rotate(90deg); }
+  .tree-icon { font-size:14px; flex-shrink:0; }
+  .tree-label { font-size:14px; font-weight:600; flex:1; }
+  .tree-badge { font-size:11px; padding:1px 8px; border-radius:10px; background: var(--surface2); color: var(--text2); }
+  .tree-children { padding-left:20px; border-left:1px solid var(--border); margin-left:18px; overflow:hidden; }
+  .tree-children.collapsed { display:none; }
+
+  .tree-field { display:flex; align-items:center; gap:10px; padding:6px 12px 6px 44px; min-height:36px; }
+  .tree-field-key { font-size:13px; color: var(--text2); min-width:180px; font-family: 'Cascadia Code','Fira Code',monospace; flex-shrink:0; }
+  .tree-field-value { flex:1; }
+  .tree-field-value input, .tree-field-value select {
+    width:100%; padding:5px 10px; background: var(--surface2); border:1px solid var(--border);
+    border-radius:6px; color: var(--text); font-size:13px; font-family: 'Cascadia Code','Fira Code',monospace;
+    outline:none; transition: border-color .15s;
+  }
+  .tree-field-value input:focus { border-color: var(--accent); }
+  .tree-field-value input.secret-field { color: var(--warning); }
+  .tree-field-type { font-size:11px; color: var(--text2); opacity:.5; min-width:50px; text-align:right; }
+
+  .tree-array-tag { display:inline-flex; align-items:center; gap:4px; padding:3px 8px; background: var(--surface2);
+    border:1px solid var(--border); border-radius:14px; font-size:12px; font-family: monospace; color: var(--text); margin:2px; }
+  .tree-array-tag .remove-tag { cursor:pointer; color: var(--text2); font-size:14px; line-height:1; }
+  .tree-array-tag .remove-tag:hover { color: var(--danger); }
+  .tree-array-wrap { display:flex; flex-wrap:wrap; gap:4px; align-items:center; flex:1; }
+  .tree-array-input { width:120px !important; padding:3px 8px !important; font-size:12px !important; }
+  .tree-add-tag { cursor:pointer; color: var(--accent); font-size:18px; line-height:1; padding:2px 4px; }
+  .tree-add-tag:hover { color: var(--accent-hover); }
+
   .btn { padding: 8px 16px; border:none; border-radius: var(--radius); font-size:14px; font-weight:500; cursor:pointer; transition: all .15s; }
   .btn-primary { background: var(--accent); color:#fff; }
   .btn-primary:hover { background: var(--accent-hover); }
@@ -114,12 +147,20 @@
   <!-- Config Panel -->
   <div class="panel active" id="panel-config">
     <div class="card">
-      <h2>Configuration Editor</h2>
-      <p style="color:var(--text2);font-size:13px;margin-bottom:12px;">
-        Edit config.json below. Secret values should use <code style="background:var(--surface2);padding:2px 6px;border-radius:4px;">${ENV_VAR}</code> placeholders.
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <h2 style="margin-bottom:0;">Configuration</h2>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <button class="btn btn-sm" style="background:var(--surface2);color:var(--text2);" onclick="toggleRawEditor();" id="toggleRawBtn">Raw JSON</button>
+        </div>
+      </div>
+      <p style="color:var(--text2);font-size:13px;margin-bottom:16px;">
+        Secret fields are highlighted in <span style="color:var(--warning);">orange</span> — use <code style="background:var(--surface2);padding:2px 6px;border-radius:4px;">${ENV_VAR}</code> placeholders.
       </p>
-      <div class="form-group">
-        <textarea id="configEditor" spellcheck="false"></textarea>
+      <div id="treeEditor"></div>
+      <div id="rawEditorWrap" style="display:none;">
+        <div class="form-group">
+          <textarea id="configEditor" spellcheck="false"></textarea>
+        </div>
       </div>
       <div class="btn-group">
         <button class="btn btn-primary" onclick="saveConfig()">Save Configuration</button>
@@ -166,21 +207,29 @@
 
 <script>
 let csrfToken = '';
+let configData = {};
+let rawMode = false;
+
+const SECTION_ICONS = {
+  gateway:'&#x1f310;', channels:'&#x1f4e1;', agent:'&#x1f916;',
+  memory:'&#x1f4be;', logging:'&#x1f4dd;', health:'&#x2764;', webui:'&#x1f5a5;',
+  feishu:'&#x1f426;', telegram:'&#x2708;', discord:'&#x1f3ae;', dingtalk:'&#x1f514;',
+  bash:'&#x1f4bb;', compaction:'&#x1f5dc;'
+};
+const SECRET_FIELDS = ['secret','token','password','api_key','apikey','app_key'];
+
+function isSecretKey(key) {
+  const l = key.toLowerCase();
+  return SECRET_FIELDS.some(p => l.includes(p));
+}
 
 // --- CSRF ---
 function getCookie(name) {
   const m = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
   return m ? m[2] : '';
 }
-
-function refreshCSRF() {
-  csrfToken = getCookie('csrf_token');
-}
-
-function apiHeaders() {
-  refreshCSRF();
-  return { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken };
-}
+function refreshCSRF() { csrfToken = getCookie('csrf_token'); }
+function apiHeaders() { refreshCSRF(); return { 'Content-Type':'application/json', 'X-CSRF-Token': csrfToken }; }
 
 // --- Tabs ---
 document.querySelectorAll('.tab').forEach(tab => {
@@ -200,24 +249,230 @@ function showToast(msg, type) {
   setTimeout(() => t.classList.remove('show'), 3000);
 }
 
-// --- Config ---
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+// --- Toggle raw/tree ---
+function toggleRawEditor() {
+  rawMode = !rawMode;
+  document.getElementById('treeEditor').style.display = rawMode ? 'none' : 'block';
+  document.getElementById('rawEditorWrap').style.display = rawMode ? 'block' : 'none';
+  document.getElementById('toggleRawBtn').textContent = rawMode ? 'Tree View' : 'Raw JSON';
+  if (rawMode) {
+    // Collect tree values into configData, then show as JSON
+    collectTreeValues();
+    document.getElementById('configEditor').value = JSON.stringify(configData, null, 2);
+  } else {
+    // Parse raw JSON back, render tree
+    try {
+      configData = JSON.parse(document.getElementById('configEditor').value);
+    } catch(e) { /* keep existing */ }
+    renderTree(configData);
+  }
+}
+
+// --- Tree Editor ---
+function renderTree(data) {
+  const container = document.getElementById('treeEditor');
+  container.innerHTML = '';
+  for (const [key, val] of Object.entries(data)) {
+    if (val && typeof val === 'object' && !Array.isArray(val)) {
+      container.appendChild(buildSection(key, val, [key]));
+    } else {
+      container.appendChild(buildField(key, val, [key]));
+    }
+  }
+}
+
+function buildSection(key, obj, path) {
+  const section = document.createElement('div');
+  section.className = 'tree-section';
+
+  const header = document.createElement('div');
+  header.className = 'tree-header';
+  const icon = SECTION_ICONS[key] || '&#x1f4c1;';
+  const childCount = Object.keys(obj).length;
+  header.innerHTML = `<span class="tree-arrow open">&#9654;</span>` +
+    `<span class="tree-icon">${icon}</span>` +
+    `<span class="tree-label">${esc(key)}</span>` +
+    `<span class="tree-badge">${childCount} fields</span>`;
+
+  const children = document.createElement('div');
+  children.className = 'tree-children';
+
+  header.addEventListener('click', () => {
+    children.classList.toggle('collapsed');
+    header.querySelector('.tree-arrow').classList.toggle('open');
+  });
+
+  for (const [k, v] of Object.entries(obj)) {
+    const childPath = [...path, k];
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      children.appendChild(buildSection(k, v, childPath));
+    } else {
+      children.appendChild(buildField(k, v, childPath));
+    }
+  }
+
+  section.appendChild(header);
+  section.appendChild(children);
+  return section;
+}
+
+function buildField(key, value, path) {
+  const row = document.createElement('div');
+  row.className = 'tree-field';
+
+  const keyEl = document.createElement('span');
+  keyEl.className = 'tree-field-key';
+  keyEl.textContent = key;
+
+  const valWrap = document.createElement('div');
+  valWrap.className = 'tree-field-value';
+
+  const typeEl = document.createElement('span');
+  typeEl.className = 'tree-field-type';
+
+  const pathAttr = path.join('.');
+  const secret = isSecretKey(key);
+
+  if (Array.isArray(value)) {
+    typeEl.textContent = 'array';
+    valWrap.appendChild(buildArrayEditor(value, pathAttr));
+  } else if (typeof value === 'boolean') {
+    typeEl.textContent = 'bool';
+    const sel = document.createElement('select');
+    sel.dataset.path = pathAttr;
+    sel.dataset.type = 'boolean';
+    sel.innerHTML = `<option value="true" ${value?'selected':''}>true</option><option value="false" ${!value?'selected':''}>false</option>`;
+    valWrap.appendChild(sel);
+  } else if (typeof value === 'number') {
+    typeEl.textContent = 'number';
+    const inp = document.createElement('input');
+    inp.type = 'number';
+    inp.value = value;
+    inp.dataset.path = pathAttr;
+    inp.dataset.type = 'number';
+    valWrap.appendChild(inp);
+  } else {
+    typeEl.textContent = 'string';
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.value = value == null ? '' : String(value);
+    inp.dataset.path = pathAttr;
+    inp.dataset.type = 'string';
+    if (secret) inp.classList.add('secret-field');
+    valWrap.appendChild(inp);
+  }
+
+  row.appendChild(keyEl);
+  row.appendChild(valWrap);
+  row.appendChild(typeEl);
+  return row;
+}
+
+function buildArrayEditor(arr, pathAttr) {
+  const wrap = document.createElement('div');
+  wrap.className = 'tree-array-wrap';
+  wrap.dataset.path = pathAttr;
+  wrap.dataset.type = 'array';
+
+  arr.forEach((item, i) => {
+    wrap.appendChild(makeTag(String(item), pathAttr));
+  });
+
+  // Add input + button
+  const addInput = document.createElement('input');
+  addInput.className = 'tree-array-input';
+  addInput.placeholder = 'add...';
+  addInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && addInput.value.trim()) {
+      wrap.insertBefore(makeTag(addInput.value.trim(), pathAttr), addInput);
+      addInput.value = '';
+    }
+  });
+  wrap.appendChild(addInput);
+
+  const addBtn = document.createElement('span');
+  addBtn.className = 'tree-add-tag';
+  addBtn.innerHTML = '+';
+  addBtn.title = 'Add item';
+  addBtn.addEventListener('click', () => {
+    if (addInput.value.trim()) {
+      wrap.insertBefore(makeTag(addInput.value.trim(), pathAttr), addInput);
+      addInput.value = '';
+    }
+  });
+  wrap.appendChild(addBtn);
+
+  return wrap;
+}
+
+function makeTag(text, pathAttr) {
+  const tag = document.createElement('span');
+  tag.className = 'tree-array-tag';
+  tag.innerHTML = esc(text) + ' <span class="remove-tag">&times;</span>';
+  tag.querySelector('.remove-tag').addEventListener('click', () => tag.remove());
+  return tag;
+}
+
+// --- Collect values from tree back to configData ---
+function collectTreeValues() {
+  // Scalar fields
+  document.querySelectorAll('#treeEditor input[data-path], #treeEditor select[data-path]').forEach(el => {
+    const path = el.dataset.path.split('.');
+    const type = el.dataset.type;
+    let val;
+    if (type === 'boolean') val = el.value === 'true';
+    else if (type === 'number') val = Number(el.value);
+    else val = el.value;
+    setNestedValue(configData, path, val);
+  });
+  // Array fields
+  document.querySelectorAll('#treeEditor .tree-array-wrap[data-path]').forEach(wrap => {
+    const path = wrap.dataset.path.split('.');
+    const tags = wrap.querySelectorAll('.tree-array-tag');
+    const arr = [];
+    tags.forEach(tag => {
+      // Text content minus the × button
+      const text = tag.firstChild.textContent.trim();
+      arr.push(text);
+    });
+    setNestedValue(configData, path, arr);
+  });
+}
+
+function setNestedValue(obj, path, value) {
+  let cur = obj;
+  for (let i = 0; i < path.length - 1; i++) {
+    if (!(path[i] in cur) || typeof cur[path[i]] !== 'object') cur[path[i]] = {};
+    cur = cur[path[i]];
+  }
+  cur[path[path.length - 1]] = value;
+}
+
+// --- Config Load/Save ---
 async function loadConfig() {
   try {
     const r = await fetch('/api/config');
     if (!r.ok) throw new Error(r.statusText);
-    const data = await r.json();
-    document.getElementById('configEditor').value = JSON.stringify(data, null, 2);
+    configData = await r.json();
+    renderTree(configData);
+    document.getElementById('configEditor').value = JSON.stringify(configData, null, 2);
   } catch(e) { showToast('Failed to load config: ' + e.message, 'error'); }
 }
 
 async function saveConfig() {
-  let parsed;
-  const raw = document.getElementById('configEditor').value;
-  try { parsed = JSON.parse(raw); } catch(e) {
-    showToast('Invalid JSON: ' + e.message, 'error'); return;
+  let toSave;
+  if (rawMode) {
+    try { toSave = JSON.parse(document.getElementById('configEditor').value); } catch(e) {
+      showToast('Invalid JSON: ' + e.message, 'error'); return;
+    }
+  } else {
+    collectTreeValues();
+    toSave = configData;
   }
   try {
-    const r = await fetch('/api/config', { method:'POST', headers: apiHeaders(), body: JSON.stringify(parsed) });
+    const r = await fetch('/api/config', { method:'POST', headers: apiHeaders(), body: JSON.stringify(toSave) });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || r.statusText);
     showToast('Configuration saved', 'success');
@@ -296,8 +551,6 @@ function formatUptime(sec) {
   const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60), s = sec%60;
   return (h?h+'h ':'') + (m?m+'m ':'') + s+'s';
 }
-
-function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
 // --- Init ---
 loadConfig();
