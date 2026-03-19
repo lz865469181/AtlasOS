@@ -19,6 +19,7 @@ import (
 	"github.com/user/feishu-ai-assistant/internal/gateway"
 	"github.com/user/feishu-ai-assistant/internal/heartbeat"
 	"github.com/user/feishu-ai-assistant/internal/memory"
+	"github.com/user/feishu-ai-assistant/internal/webui"
 )
 
 func main() {
@@ -72,6 +73,15 @@ func main() {
 		healthServer = startHealthCheck(cfg.Health)
 	}
 
+	// 8. WebUI console
+	var webuiServer *webui.Server
+	if cfg.WebUI.Enabled {
+		webuiServer = webui.NewServer(*cfgPath, cfg.WebUI.Port)
+		if err := webuiServer.Start(); err != nil {
+			log.Printf("WebUI start warning: %v", err)
+		}
+	}
+
 	log.Printf("Ready on ws://%s", cfg.Gateway.Address())
 
 	// 8. Wait for signal
@@ -82,6 +92,9 @@ func main() {
 	log.Println("Shutting down...")
 	hb.Stop()
 	gw.Stop()
+	if webuiServer != nil {
+		webuiServer.Stop()
+	}
 	if healthServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

@@ -43,5 +43,6 @@
     }
   },
   "logging": { "level": "info", "format": "json", "output": "stdout" },
-  "health": { "enabled": true, "endpoint": "/health", "port": 18790 }
+  "health": { "enabled": true, "endpoint": "/health", "port": 18790 },
+  "webui": { "enabled": true, "port": 18791 }
 }

@@ -15,6 +15,12 @@ type Config struct {
 	Memory   MemoryConfig             `json:"memory"`
 	Logging  LoggingConfig            `json:"logging"`
 	Health   HealthConfig             `json:"health"`
+	WebUI    WebUIConfig              `json:"webui"`
+}
+
+type WebUIConfig struct {
+	Enabled bool `json:"enabled"`
+	Port    int  `json:"port"`
 }
 
 type GatewayConfig struct {
@@ -168,4 +174,5 @@ func applyDefaults(cfg *Config) {
 	if cfg.Logging.Level == "" { cfg.Logging.Level = "info" }
 	if cfg.Logging.Format == "" { cfg.Logging.Format = "json" }
 	if cfg.Logging.Output == "" { cfg.Logging.Output = "stdout" }
+	if cfg.WebUI.Port == 0 { cfg.WebUI.Port = 18791 }
 }
