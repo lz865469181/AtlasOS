@@ -22,6 +22,7 @@ type Server struct {
 	startTime  time.Time
 	srv        *http.Server
 	mu         sync.RWMutex
+	Events     *EventBus
 }
 
 // NewServer creates a web UI server bound to 127.0.0.1 on the given port.
@@ -30,6 +31,7 @@ func NewServer(configPath string, port int) *Server {
 		configPath: configPath,
 		addr:       fmt.Sprintf("127.0.0.1:%d", port),
 		startTime:  time.Now(),
+		Events:     NewEventBus(500),
 	}
 }
 
@@ -48,12 +50,14 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/config", s.handleConfig)
 	mux.HandleFunc("/api/secrets", s.handleSecrets)
 	mux.HandleFunc("/api/status", s.handleStatus)
+	mux.HandleFunc("/api/events", s.handleSSE)
+	mux.HandleFunc("/api/events/history", s.handleEventsHistory)
 
 	s.srv = &http.Server{
 		Addr:         s.addr,
 		Handler:      s.localhostOnly(s.csrfMiddleware(mux)),
 		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		WriteTimeout: 0, // SSE requires no write timeout
 	}
 
 	ln, err := net.Listen("tcp", s.addr)
@@ -259,6 +263,57 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		"platform":       fmt.Sprintf("%s", os.Getenv("OS")),
 		"time":           time.Now().Format(time.RFC3339),
 	})
+}
+
+// --- SSE (Server-Sent Events) ---
+
+func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	sub := s.Events.Subscribe()
+	defer s.Events.Unsubscribe(sub)
+
+	// Send recent history first
+	history := s.Events.Recent(100)
+	for _, e := range history {
+		data, _ := json.Marshal(e)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+	}
+	flusher.Flush()
+
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case e := <-sub.Ch:
+			data, _ := json.Marshal(e)
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		}
+	}
+}
+
+func (s *Server) handleEventsHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(s.Events.RecentJSON(200))
 }
 
 // --- Helpers ---

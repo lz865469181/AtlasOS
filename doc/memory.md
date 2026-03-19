@@ -237,3 +237,43 @@ Browser (localhost:18791)
   - Section icons map: `SECTION_ICONS` object
   - CSS additions: `.tree-section`, `.tree-header`, `.tree-arrow`, `.tree-field`, `.tree-field-key`, `.tree-field-value`, `.tree-array-tag`, `.tree-array-wrap`, `.tree-add-tag` classes
 - `doc/memory.md` — Updated Configuration tab description
+
+### 2026-03-19 — Monitor tab: live logs + message display
+
+**Created files:**
+- `internal/webui/eventbus.go` — Ring buffer (500 events) with pub/sub for real-time SSE streaming. `EventBus` stores `Event` structs (log or message type), supports `Subscribe()`/`Unsubscribe()` for SSE clients, `Recent(n)` for history, and `PublishLog()`/`PublishMessage()` convenience methods.
+- `internal/webui/logwriter.go` — `LogWriter` implements `io.Writer`, tees `log.SetOutput()` to both `os.Stdout` and `EventBus.PublishLog()`. Parses level from log content (fatal/error/warn/debug/info).
+
+**Modified files:**
+- `internal/webui/server.go` — Added `Events *EventBus` field to `Server`, auto-created in `NewServer()`. Two new endpoints:
+  - `GET /api/events` — SSE (Server-Sent Events) stream. Sends recent history on connect, then live events. `text/event-stream` content type, no write timeout.
+  - `GET /api/events/history` — Returns last 200 events as JSON array.
+- `internal/gateway/gateway.go` — Added `eventBus *webui.EventBus` field, `SetEventBus()` method. `RegisterChannel()` now publishes incoming (@bot) and outgoing (reply) message events to the bus.
+- `cmd/server/main.go` — After creating WebUI server: wires `log.SetOutput()` to `NewLogWriter(webuiServer.Events)`, calls `gw.SetEventBus(webuiServer.Events)`.
+- `internal/webui/static/index.html` — Added 4th "Monitor" tab with:
+  - **Live Logs** section: auto-scrolling log viewer with level color-coding (fatal=red bold, error=red, warn=yellow, info=white, debug=gray), level filter dropdown, pause/resume, clear. Max 500 lines in DOM.
+  - **Messages** section: card-based display of @bot messages (purple/blue border, "IN" badge) and assistant replies (green border, "OUT" badge). Shows user name, timestamp, platform, session ID prefix. Max 200 messages.
+  - SSE via `EventSource('/api/events')`, connection status indicator (green "connected" / red "disconnected"), auto-reconnect built into EventSource spec.
+  - CSS: `.monitor-split`, `.log-container`, `.log-toolbar`, `.log-scroll`, `.log-line`, `.msg-container`, `.msg-item`, `.msg-meta`, `.sse-status` classes.
+
+**Architecture:**
+```
+log.Printf(...)
+    |
+    v
+LogWriter.Write() --> os.Stdout (terminal)
+    |
+    v
+EventBus.PublishLog() --> ring buffer + SSE subscribers
+                                |
+                                v
+                         Browser EventSource(/api/events)
+                                |
+                                v
+                         Monitor tab (logs + messages)
+
+Gateway.RegisterChannel()
+    |
+    +-- msg received --> EventBus.PublishMessage("in", ...)
+    +-- reply sent   --> EventBus.PublishMessage("out", ...)
+```

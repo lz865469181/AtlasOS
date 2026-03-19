@@ -9,6 +9,7 @@ import (
 	"github.com/user/feishu-ai-assistant/internal/channel"
 	"github.com/user/feishu-ai-assistant/internal/config"
 	"github.com/user/feishu-ai-assistant/internal/session"
+	"github.com/user/feishu-ai-assistant/internal/webui"
 )
 
 type Gateway struct {
@@ -19,6 +20,7 @@ type Gateway struct {
 	router     *Router
 	wsServer   *WSServer
 	channels   []channel.Channel
+	eventBus   *webui.EventBus
 }
 
 func New(cfg config.Config) *Gateway {
@@ -46,6 +48,11 @@ func (gw *Gateway) Start(ctx context.Context) error {
 	return nil
 }
 
+// SetEventBus attaches an event bus for real-time monitoring.
+func (gw *Gateway) SetEventBus(bus *webui.EventBus) {
+	gw.eventBus = bus
+}
+
 func (gw *Gateway) RegisterChannel(ch channel.Channel) {
 	gw.channels = append(gw.channels, ch)
 	ch.OnMessage(func(msg channel.ChannelMessage) {
@@ -53,7 +60,19 @@ func (gw *Gateway) RegisterChannel(ch channel.Channel) {
 		if msg.ChatType == "group" && !msg.MentionBot {
 			return
 		}
+
+		// Publish incoming message event
+		if gw.eventBus != nil {
+			gw.eventBus.PublishMessage("in", msg.UserName, msg.UserID, msg.ChatID, msg.Platform, msg.Content, "")
+		}
+
 		reply := gw.router.HandleMessage(context.Background(), msg)
+
+		// Publish outgoing reply event
+		if gw.eventBus != nil {
+			gw.eventBus.PublishMessage("out", "assistant", "", reply.ChatID, msg.Platform, reply.Content, reply.SessionID)
+		}
+
 		ch.SendReply(context.Background(), reply)
 	})
 }

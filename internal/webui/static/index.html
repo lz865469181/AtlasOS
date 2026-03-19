@@ -120,6 +120,39 @@
   .status-item .label { font-size:12px; color: var(--text2); margin-bottom:4px; }
   .status-item .value { font-size:16px; font-weight:600; }
 
+  /* Monitor tab */
+  .monitor-split { display:flex; flex-direction:column; gap:16px; }
+  .log-container { background: var(--surface); border:1px solid var(--border); border-radius: var(--radius); display:flex; flex-direction:column; height:380px; }
+  .log-toolbar { display:flex; align-items:center; gap:8px; padding:10px 16px; border-bottom:1px solid var(--border); flex-shrink:0; }
+  .log-toolbar h3 { margin:0; font-size:14px; font-weight:600; flex:1; }
+  .log-toolbar select { padding:4px 8px; background:var(--surface2); border:1px solid var(--border); border-radius:6px; color:var(--text); font-size:12px; }
+  .log-scroll { flex:1; overflow-y:auto; padding:8px 16px; font-family:'Cascadia Code','Fira Code',monospace; font-size:12px; line-height:1.6; }
+  .log-line { white-space:pre-wrap; word-break:break-all; padding:1px 0; }
+  .log-line .log-ts { color:var(--text2); margin-right:8px; }
+  .log-line.level-error { color:#f87171; }
+  .log-line.level-warn { color:#fbbf24; }
+  .log-line.level-fatal { color:#ef4444; font-weight:700; }
+  .log-line.level-debug { color:var(--text2); }
+  .log-line.level-info { color:var(--text); }
+
+  .msg-container { background: var(--surface); border:1px solid var(--border); border-radius: var(--radius); }
+  .msg-toolbar { display:flex; align-items:center; gap:8px; padding:10px 16px; border-bottom:1px solid var(--border); }
+  .msg-toolbar h3 { margin:0; font-size:14px; font-weight:600; flex:1; }
+  .msg-list { max-height:400px; overflow-y:auto; padding:12px 16px; }
+  .msg-item { padding:10px 14px; border-radius:var(--radius); margin-bottom:8px; position:relative; }
+  .msg-item.msg-in { background:rgba(99,102,241,.1); border-left:3px solid var(--accent); }
+  .msg-item.msg-out { background:rgba(34,197,94,.08); border-left:3px solid var(--success); }
+  .msg-meta { display:flex; gap:10px; font-size:11px; color:var(--text2); margin-bottom:6px; align-items:center; }
+  .msg-meta .msg-dir { font-weight:700; text-transform:uppercase; font-size:10px; padding:1px 6px; border-radius:4px; }
+  .msg-in .msg-dir { background:rgba(99,102,241,.2); color:var(--accent); }
+  .msg-out .msg-dir { background:rgba(34,197,94,.15); color:var(--success); }
+  .msg-text { font-size:13px; line-height:1.5; white-space:pre-wrap; word-break:break-word; }
+  .msg-empty { text-align:center; color:var(--text2); padding:40px; font-size:14px; }
+
+  .sse-status { font-size:11px; padding:2px 8px; border-radius:10px; }
+  .sse-status.connected { background:rgba(34,197,94,.15); color:var(--success); }
+  .sse-status.disconnected { background:rgba(239,68,68,.15); color:var(--danger); }
+
   @media(max-width:600px) {
     .secret-row { flex-wrap:wrap; }
     .set-secret-form { flex-wrap:wrap; }
@@ -140,6 +173,7 @@
 <div class="tabs">
   <div class="tab active" data-panel="config">Configuration</div>
   <div class="tab" data-panel="secrets">Secrets</div>
+  <div class="tab" data-panel="monitor">Monitor</div>
   <div class="tab" data-panel="status">Status</div>
 </div>
 
@@ -190,6 +224,38 @@
           <input id="secretValue" type="password" placeholder="Enter secret value" />
         </div>
         <button class="btn btn-primary" onclick="setSecret()">Set</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Monitor Panel -->
+  <div class="panel" id="panel-monitor">
+    <div class="monitor-split">
+      <div class="log-container">
+        <div class="log-toolbar">
+          <h3>Live Logs</h3>
+          <span class="sse-status disconnected" id="sseStatus">disconnected</span>
+          <select id="logLevelFilter" onchange="applyLogFilter()">
+            <option value="all">All Levels</option>
+            <option value="error">Error+</option>
+            <option value="warn">Warn+</option>
+            <option value="info" selected>Info+</option>
+            <option value="debug">Debug</option>
+          </select>
+          <button class="btn btn-sm" style="background:var(--surface2);color:var(--text2);" onclick="toggleLogPause();" id="logPauseBtn">Pause</button>
+          <button class="btn btn-sm" style="background:var(--surface2);color:var(--text2);" onclick="clearLogs();">Clear</button>
+        </div>
+        <div class="log-scroll" id="logScroll"></div>
+      </div>
+
+      <div class="msg-container">
+        <div class="msg-toolbar">
+          <h3>Messages</h3>
+          <button class="btn btn-sm" style="background:var(--surface2);color:var(--text2);" onclick="clearMessages();">Clear</button>
+        </div>
+        <div class="msg-list" id="msgList">
+          <div class="msg-empty" id="msgEmpty">No messages yet. Waiting for @bot mentions...</div>
+        </div>
       </div>
     </div>
   </div>
@@ -552,11 +618,123 @@ function formatUptime(sec) {
   return (h?h+'h ':'') + (m?m+'m ':'') + s+'s';
 }
 
+// --- Monitor: SSE + Logs + Messages ---
+let eventSource = null;
+let logPaused = false;
+let logBuffer = [];
+const MAX_LOG_LINES = 500;
+const LOG_LEVELS = { fatal:0, error:1, warn:2, info:3, debug:4 };
+
+function connectSSE() {
+  if (eventSource) { eventSource.close(); }
+  eventSource = new EventSource('/api/events');
+  eventSource.onopen = () => {
+    document.getElementById('sseStatus').textContent = 'connected';
+    document.getElementById('sseStatus').className = 'sse-status connected';
+  };
+  eventSource.onmessage = (ev) => {
+    try {
+      const e = JSON.parse(ev.data);
+      if (e.type === 'log') { appendLog(e); }
+      else if (e.type === 'message') { appendMessage(e); }
+    } catch(err) {}
+  };
+  eventSource.onerror = () => {
+    document.getElementById('sseStatus').textContent = 'disconnected';
+    document.getElementById('sseStatus').className = 'sse-status disconnected';
+  };
+}
+
+function appendLog(e) {
+  logBuffer.push(e);
+  if (logBuffer.length > MAX_LOG_LINES) logBuffer.shift();
+  if (logPaused) return;
+  const level = (e.level || 'info').toLowerCase();
+  if (!shouldShowLevel(level)) return;
+  const container = document.getElementById('logScroll');
+  const line = document.createElement('div');
+  line.className = 'log-line level-' + level;
+  line.dataset.level = level;
+  const ts = e.ts ? new Date(e.ts).toLocaleTimeString() : '';
+  line.innerHTML = '<span class="log-ts">' + esc(ts) + '</span>' + esc(e.content || '');
+  container.appendChild(line);
+  // Trim DOM
+  while (container.children.length > MAX_LOG_LINES) container.removeChild(container.firstChild);
+  container.scrollTop = container.scrollHeight;
+}
+
+function shouldShowLevel(level) {
+  const filter = document.getElementById('logLevelFilter').value;
+  if (filter === 'all') return true;
+  return (LOG_LEVELS[level] || 3) <= (LOG_LEVELS[filter] || 3);
+}
+
+function applyLogFilter() {
+  const container = document.getElementById('logScroll');
+  container.innerHTML = '';
+  logBuffer.forEach(e => {
+    const level = (e.level || 'info').toLowerCase();
+    if (!shouldShowLevel(level)) return;
+    const line = document.createElement('div');
+    line.className = 'log-line level-' + level;
+    line.dataset.level = level;
+    const ts = e.ts ? new Date(e.ts).toLocaleTimeString() : '';
+    line.innerHTML = '<span class="log-ts">' + esc(ts) + '</span>' + esc(e.content || '');
+    container.appendChild(line);
+  });
+  container.scrollTop = container.scrollHeight;
+}
+
+function toggleLogPause() {
+  logPaused = !logPaused;
+  document.getElementById('logPauseBtn').textContent = logPaused ? 'Resume' : 'Pause';
+  if (!logPaused) applyLogFilter();
+}
+
+function clearLogs() {
+  logBuffer = [];
+  document.getElementById('logScroll').innerHTML = '';
+}
+
+function appendMessage(e) {
+  const list = document.getElementById('msgList');
+  const empty = document.getElementById('msgEmpty');
+  if (empty) empty.remove();
+
+  const item = document.createElement('div');
+  item.className = 'msg-item ' + (e.direction === 'in' ? 'msg-in' : 'msg-out');
+
+  const ts = e.ts ? new Date(e.ts).toLocaleTimeString() : '';
+  const dirLabel = e.direction === 'in' ? 'IN' : 'OUT';
+  const user = e.direction === 'in' ? (e.user_name || e.user_id || 'user') : 'Assistant';
+  const platform = e.platform ? ' · ' + esc(e.platform) : '';
+  const session = e.session_id ? ' · ' + esc(e.session_id.substring(0, 8)) : '';
+
+  item.innerHTML =
+    '<div class="msg-meta">' +
+      '<span class="msg-dir">' + dirLabel + '</span>' +
+      '<span>' + esc(user) + '</span>' +
+      '<span>' + esc(ts) + platform + session + '</span>' +
+    '</div>' +
+    '<div class="msg-text">' + esc(e.text || '') + '</div>';
+
+  list.appendChild(item);
+  // Keep at most 200 messages
+  while (list.children.length > 200) list.removeChild(list.firstChild);
+  list.scrollTop = list.scrollHeight;
+}
+
+function clearMessages() {
+  const list = document.getElementById('msgList');
+  list.innerHTML = '<div class="msg-empty" id="msgEmpty">No messages yet. Waiting for @bot mentions...</div>';
+}
+
 // --- Init ---
 loadConfig();
 loadSecrets();
 loadStatus();
 setInterval(loadStatus, 15000);
+connectSSE();
 </script>
 </body>
 </html>

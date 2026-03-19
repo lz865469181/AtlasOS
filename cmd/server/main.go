@@ -77,6 +77,13 @@ func main() {
 	var webuiServer *webui.Server
 	if cfg.WebUI.Enabled {
 		webuiServer = webui.NewServer(*cfgPath, cfg.WebUI.Port)
+
+		// Wire log output to event bus (tee to stdout + SSE)
+		log.SetOutput(webui.NewLogWriter(webuiServer.Events))
+
+		// Wire event bus to gateway for message monitoring
+		gw.SetEventBus(webuiServer.Events)
+
 		if err := webuiServer.Start(); err != nil {
 			log.Printf("WebUI start warning: %v", err)
 		}
