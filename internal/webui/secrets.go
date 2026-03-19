@@ -1,86 +1,37 @@
 package webui
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
-	"runtime"
 	"strings"
+	"sync"
 )
 
-// SetEnvPersistent sets an environment variable that persists across reboots.
-// On Windows: uses "setx" (writes to HKCU registry).
-// On Linux/macOS: appends to ~/.profile.
-func SetEnvPersistent(key, value string) error {
-	if key == "" {
-		return fmt.Errorf("key must not be empty")
-	}
-	if !isValidEnvKey(key) {
-		return fmt.Errorf("invalid environment variable name: %s", key)
-	}
-
-	// Set in current process immediately
-	os.Setenv(key, value)
-
-	switch runtime.GOOS {
-	case "windows":
-		cmd := exec.Command("setx", key, value)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("setx %s: %v (%s)", key, err, strings.TrimSpace(string(out)))
-		}
-		return nil
-	default:
-		return appendToProfile(key, value)
-	}
+// SecretKeyMapping maps a secret key name to its JSON path in config.json.
+var SecretKeyMapping = map[string]string{
+	"FEISHU_APP_ID":      "channels.feishu.app_id",
+	"FEISHU_APP_SECRET":  "channels.feishu.app_secret",
+	"TELEGRAM_BOT_TOKEN": "channels.telegram.bot_token",
+	"DISCORD_BOT_TOKEN":  "channels.discord.bot_token",
+	"DINGTALK_APP_KEY":   "channels.dingtalk.app_key",
+	"DINGTALK_APP_SECRET":"channels.dingtalk.app_secret",
+	"CLAUDE_CLI_PATH":    "agent.claude_cli_path",
+	"CLAUDE_API_KEY":     "agent.claude_api_key",
+	"ANTHROPIC_API_KEY":  "agent.anthropic_api_key",
 }
 
-// RemoveEnvPersistent removes a persistent environment variable.
-func RemoveEnvPersistent(key string) error {
-	if key == "" {
-		return fmt.Errorf("key must not be empty")
-	}
-
-	os.Unsetenv(key)
-
-	switch runtime.GOOS {
-	case "windows":
-		// setx with empty string effectively removes user env var
-		cmd := exec.Command("reg", "delete", `HKCU\Environment`, "/v", key, "/f")
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("reg delete %s: %v (%s)", key, err, strings.TrimSpace(string(out)))
-		}
-		return nil
-	default:
-		return removeFromProfile(key)
-	}
-}
-
-// GetSecretKeys returns known secret-related environment variable names and their masked values.
-func GetSecretKeys() []SecretEntry {
-	knownKeys := []string{
-		"FEISHU_APP_ID",
-		"FEISHU_APP_SECRET",
-		"TELEGRAM_BOT_TOKEN",
-		"DISCORD_BOT_TOKEN",
-		"DINGTALK_APP_KEY",
-		"DINGTALK_APP_SECRET",
-		"CLAUDE_CLI_PATH",
-		"CLAUDE_API_KEY",
-		"ANTHROPIC_API_KEY",
-	}
-
-	var entries []SecretEntry
-	for _, k := range knownKeys {
-		v := os.Getenv(k)
-		entries = append(entries, SecretEntry{
-			Key:    k,
-			Masked: MaskValue(v),
-			IsSet:  v != "",
-		})
-	}
-	return entries
+// SecretKeyOrder defines the display order.
+var SecretKeyOrder = []string{
+	"FEISHU_APP_ID",
+	"FEISHU_APP_SECRET",
+	"TELEGRAM_BOT_TOKEN",
+	"DISCORD_BOT_TOKEN",
+	"DINGTALK_APP_KEY",
+	"DINGTALK_APP_SECRET",
+	"CLAUDE_CLI_PATH",
+	"CLAUDE_API_KEY",
+	"ANTHROPIC_API_KEY",
 }
 
 // SecretEntry represents a secret with masked value.
@@ -90,8 +41,189 @@ type SecretEntry struct {
 	IsSet  bool   `json:"is_set"`
 }
 
+// SecretStore manages encrypted secrets in config.json.
+type SecretStore struct {
+	configPath string
+	mu         sync.RWMutex
+}
+
+// NewSecretStore creates a store that reads/writes secrets in the config file.
+func NewSecretStore(configPath string) *SecretStore {
+	return &SecretStore{configPath: configPath}
+}
+
+// List returns all known secret keys with masked values.
+func (ss *SecretStore) List() []SecretEntry {
+	ss.mu.RLock()
+	defer ss.mu.RUnlock()
+
+	cfg := ss.readConfigMap()
+	var entries []SecretEntry
+	for _, key := range SecretKeyOrder {
+		jsonPath, ok := SecretKeyMapping[key]
+		if !ok {
+			continue
+		}
+		rawVal := getNestedString(cfg, jsonPath)
+		plaintext := ""
+		if rawVal != "" {
+			if IsEncrypted(rawVal) {
+				decrypted, err := Decrypt(rawVal)
+				if err == nil {
+					plaintext = decrypted
+				} else {
+					plaintext = "(decrypt error)"
+				}
+			} else {
+				// Plaintext value (legacy or non-secret)
+				plaintext = rawVal
+			}
+		}
+		entries = append(entries, SecretEntry{
+			Key:    key,
+			Masked: MaskValue(plaintext),
+			IsSet:  plaintext != "" && plaintext != "(decrypt error)",
+		})
+	}
+	return entries
+}
+
+// Set encrypts and writes a secret value to config.json.
+func (ss *SecretStore) Set(key, value string) error {
+	if key == "" || value == "" {
+		return fmt.Errorf("key and value are required")
+	}
+	if !isValidEnvKey(key) {
+		return fmt.Errorf("invalid key: %s", key)
+	}
+	jsonPath, ok := SecretKeyMapping[key]
+	if !ok {
+		return fmt.Errorf("unknown secret key: %s", key)
+	}
+
+	encrypted, err := Encrypt(value)
+	if err != nil {
+		return fmt.Errorf("encrypt: %w", err)
+	}
+
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+
+	cfg := ss.readConfigMap()
+	setNestedStringInMap(cfg, jsonPath, encrypted)
+	return ss.writeConfigMap(cfg)
+}
+
+// Remove clears a secret value in config.json (sets to empty string).
+func (ss *SecretStore) Remove(key string) error {
+	if key == "" {
+		return fmt.Errorf("key is required")
+	}
+	jsonPath, ok := SecretKeyMapping[key]
+	if !ok {
+		return fmt.Errorf("unknown secret key: %s", key)
+	}
+
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+
+	cfg := ss.readConfigMap()
+	setNestedStringInMap(cfg, jsonPath, "")
+	return ss.writeConfigMap(cfg)
+}
+
+// DecryptConfig reads config.json and returns a copy with all ENC: values decrypted.
+// This is used at load time so the rest of the app gets plaintext config.
+func DecryptConfigFile(configPath string) ([]byte, error) {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, err
+	}
+	var raw interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	decryptWalk(raw)
+	return json.Marshal(raw)
+}
+
+// decryptWalk recursively decrypts all ENC: string values in a JSON tree.
+func decryptWalk(v interface{}) {
+	switch val := v.(type) {
+	case map[string]interface{}:
+		for k, child := range val {
+			if s, ok := child.(string); ok && IsEncrypted(s) {
+				if decrypted, err := Decrypt(s); err == nil {
+					val[k] = decrypted
+				}
+			} else {
+				decryptWalk(child)
+			}
+		}
+	case []interface{}:
+		for i, child := range val {
+			if s, ok := child.(string); ok && IsEncrypted(s) {
+				if decrypted, err := Decrypt(s); err == nil {
+					val[i] = decrypted
+				}
+			} else {
+				decryptWalk(child)
+			}
+		}
+	}
+}
+
+// --- Helpers ---
+
+func (ss *SecretStore) readConfigMap() map[string]interface{} {
+	data, err := os.ReadFile(ss.configPath)
+	if err != nil {
+		return make(map[string]interface{})
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(data, &m); err != nil {
+		return make(map[string]interface{})
+	}
+	return m
+}
+
+func (ss *SecretStore) writeConfigMap(m map[string]interface{}) error {
+	pretty, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(ss.configPath, append(pretty, '\n'), 0644)
+}
+
+func getNestedString(m map[string]interface{}, path string) string {
+	parts := strings.Split(path, ".")
+	var cur interface{} = m
+	for _, p := range parts {
+		obj, ok := cur.(map[string]interface{})
+		if !ok {
+			return ""
+		}
+		cur = obj[p]
+	}
+	s, _ := cur.(string)
+	return s
+}
+
+func setNestedStringInMap(m map[string]interface{}, path, value string) {
+	parts := strings.Split(path, ".")
+	cur := m
+	for i := 0; i < len(parts)-1; i++ {
+		child, ok := cur[parts[i]].(map[string]interface{})
+		if !ok {
+			child = make(map[string]interface{})
+			cur[parts[i]] = child
+		}
+		cur = child
+	}
+	cur[parts[len(parts)-1]] = value
+}
+
 // MaskValue masks the middle of a secret value for display.
-// Shows first 4 and last 4 characters. Empty returns "(not set)".
 func MaskValue(v string) string {
 	if v == "" {
 		return "(not set)"
@@ -119,48 +251,4 @@ func isValidEnvKey(key string) bool {
 		return false
 	}
 	return true
-}
-
-func profilePath() string {
-	home, _ := os.UserHomeDir()
-	return home + "/.profile"
-}
-
-func appendToProfile(key, value string) error {
-	path := profilePath()
-	// Remove existing entry first
-	removeFromProfile(key)
-
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return fmt.Errorf("open %s: %w", path, err)
-	}
-	defer f.Close()
-
-	// Use single quotes to prevent shell expansion, escape existing single quotes
-	escaped := strings.ReplaceAll(value, "'", "'\\''")
-	line := fmt.Sprintf("\nexport %s='%s'\n", key, escaped)
-	_, err = f.WriteString(line)
-	return err
-}
-
-func removeFromProfile(key string) error {
-	path := profilePath()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil // file doesn't exist, nothing to remove
-	}
-
-	lines := strings.Split(string(data), "\n")
-	var kept []string
-	prefix := "export " + key + "="
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, prefix) {
-			continue
-		}
-		kept = append(kept, line)
-	}
-
-	return os.WriteFile(path, []byte(strings.Join(kept, "\n")), 0644)
 }

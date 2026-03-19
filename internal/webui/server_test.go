@@ -2,6 +2,7 @@ package webui
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -105,10 +106,20 @@ func TestSanitizeSecretsPreservesPlaceholders(t *testing.T) {
 }
 
 func TestGetSecretKeys(t *testing.T) {
-	os.Setenv("FEISHU_APP_ID", "test-id-12345678")
-	defer os.Unsetenv("FEISHU_APP_ID")
+	// Create a temp config with an encrypted secret
+	tmpDir := t.TempDir()
+	cfgPath := tmpDir + "/config.json"
 
-	entries := GetSecretKeys()
+	// Encrypt a test value
+	enc, err := Encrypt("test-id-12345678")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfgData := fmt.Sprintf(`{"channels":{"feishu":{"app_id":%q,"app_secret":"","enabled":true}}}`, enc)
+	os.WriteFile(cfgPath, []byte(cfgData), 0644)
+
+	store := NewSecretStore(cfgPath)
+	entries := store.List()
 	if len(entries) == 0 {
 		t.Fatal("expected entries")
 	}

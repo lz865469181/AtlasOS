@@ -206,9 +206,9 @@
   <!-- Secrets Panel -->
   <div class="panel" id="panel-secrets">
     <div class="card">
-      <h2>Environment Secrets</h2>
+      <h2>Secrets</h2>
       <p style="color:var(--text2);font-size:13px;margin-bottom:16px;">
-        Secrets are stored as persistent system environment variables. Values are never exposed — only masked previews are shown.
+        Secrets are stored AES-256 encrypted in config.json using a machine-derived key. Values are never exposed — only masked previews are shown.
       </p>
       <div id="secretsList"></div>
     </div>
@@ -581,7 +581,7 @@ async function setSecret() {
 }
 
 async function removeSecret(key) {
-  if (!confirm('Remove ' + key + '? This deletes the system environment variable.')) return;
+  if (!confirm('Remove ' + key + '? This clears the encrypted value from config.json.')) return;
   try {
     const r = await fetch('/api/secrets', { method:'DELETE', headers: apiHeaders(), body: JSON.stringify({key}) });
     const data = await r.json();

@@ -1,9 +1,15 @@
 package config
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -120,11 +126,13 @@ type HealthConfig struct {
 }
 
 func Load(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
+	// First pass: decrypt any ENC: values in the raw JSON
+	decrypted, err := decryptConfigValues(path)
 	if err != nil {
-		return nil, fmt.Errorf("read config: %w", err)
+		return nil, fmt.Errorf("decrypt config: %w", err)
 	}
-	expanded := os.ExpandEnv(string(data))
+	// Second pass: expand ${ENV_VAR} placeholders
+	expanded := os.ExpandEnv(string(decrypted))
 
 	var cfg Config
 	if err := json.Unmarshal([]byte(expanded), &cfg); err != nil {
@@ -175,4 +183,135 @@ func applyDefaults(cfg *Config) {
 	if cfg.Logging.Format == "" { cfg.Logging.Format = "json" }
 	if cfg.Logging.Output == "" { cfg.Logging.Output = "stdout" }
 	if cfg.WebUI.Port == 0 { cfg.WebUI.Port = 18791 }
+}
+
+// --- Config-level decryption (no dependency on webui package) ---
+
+const encPrefix = "ENC:"
+
+func decryptConfigValues(path string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read config: %w", err)
+	}
+	// Quick check: if no ENC: values, skip decryption entirely
+	if !strings.Contains(string(data), encPrefix) {
+		return data, nil
+	}
+	var raw interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	key, err := configDeriveKey()
+	if err != nil {
+		return nil, fmt.Errorf("derive key: %w", err)
+	}
+	configDecryptWalk(raw, key)
+	return json.Marshal(raw)
+}
+
+func configDecryptWalk(v interface{}, key []byte) {
+	switch val := v.(type) {
+	case map[string]interface{}:
+		for k, child := range val {
+			if s, ok := child.(string); ok && strings.HasPrefix(s, encPrefix) {
+				if dec, err := configDecryptValue(s, key); err == nil {
+					val[k] = dec
+				}
+			} else {
+				configDecryptWalk(child, key)
+			}
+		}
+	case []interface{}:
+		for i, child := range val {
+			if s, ok := child.(string); ok && strings.HasPrefix(s, encPrefix) {
+				if dec, err := configDecryptValue(s, key); err == nil {
+					val[i] = dec
+				}
+			} else {
+				configDecryptWalk(child, key)
+			}
+		}
+	}
+}
+
+func configDecryptValue(encrypted string, key []byte) (string, error) {
+	raw := strings.TrimPrefix(encrypted, encPrefix)
+	data, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		return "", err
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	nonceSize := gcm.NonceSize()
+	if len(data) < nonceSize {
+		return "", fmt.Errorf("ciphertext too short")
+	}
+	plaintext, err := gcm.Open(nil, data[:nonceSize], data[nonceSize:], nil)
+	if err != nil {
+		return "", err
+	}
+	return string(plaintext), nil
+}
+
+func configDeriveKey() ([]byte, error) {
+	seed, err := configMachineID()
+	if err != nil {
+		return nil, err
+	}
+	h := sha256.New()
+	h.Write([]byte("feishu-ai-assistant:secret-encryption:"))
+	h.Write([]byte(seed))
+	return h.Sum(nil), nil
+}
+
+func configMachineID() (string, error) {
+	switch runtime.GOOS {
+	case "windows":
+		out, err := exec.Command("reg", "query",
+			`HKLM\SOFTWARE\Microsoft\Cryptography`, "/v", "MachineGuid").CombinedOutput()
+		if err == nil {
+			for _, line := range strings.Split(string(out), "\n") {
+				line = strings.TrimSpace(line)
+				if strings.Contains(line, "MachineGuid") {
+					parts := strings.Fields(line)
+					if len(parts) >= 3 {
+						return parts[len(parts)-1], nil
+					}
+				}
+			}
+		}
+	case "linux":
+		if data, err := os.ReadFile("/etc/machine-id"); err == nil {
+			return strings.TrimSpace(string(data)), nil
+		}
+		if data, err := os.ReadFile("/var/lib/dbus/machine-id"); err == nil {
+			return strings.TrimSpace(string(data)), nil
+		}
+	case "darwin":
+		out, err := exec.Command("ioreg", "-rd1", "-c", "IOPlatformExpertDevice").CombinedOutput()
+		if err == nil {
+			for _, line := range strings.Split(string(out), "\n") {
+				if strings.Contains(line, "IOPlatformUUID") {
+					parts := strings.Split(line, `"`)
+					if len(parts) >= 4 {
+						return parts[3], nil
+					}
+				}
+			}
+		}
+	}
+	// Fallback
+	hostname, _ := os.Hostname()
+	home, _ := os.UserHomeDir()
+	if hostname == "" && home == "" {
+		return "", fmt.Errorf("cannot determine machine identity")
+	}
+	return hostname + ":" + home, nil
 }

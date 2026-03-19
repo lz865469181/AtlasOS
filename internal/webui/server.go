@@ -23,6 +23,7 @@ type Server struct {
 	srv        *http.Server
 	mu         sync.RWMutex
 	Events     *EventBus
+	secrets    *SecretStore
 }
 
 // NewServer creates a web UI server bound to 127.0.0.1 on the given port.
@@ -32,6 +33,7 @@ func NewServer(configPath string, port int) *Server {
 		addr:       fmt.Sprintf("127.0.0.1:%d", port),
 		startTime:  time.Now(),
 		Events:     NewEventBus(500),
+		secrets:    NewSecretStore(configPath),
 	}
 }
 
@@ -206,7 +208,7 @@ func (s *Server) handleSecrets(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getSecrets(w http.ResponseWriter, _ *http.Request) {
-	entries := GetSecretKeys()
+	entries := s.secrets.List()
 	jsonOK(w, entries)
 }
 
@@ -224,8 +226,8 @@ func (s *Server) postSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := SetEnvPersistent(req.Key, req.Value); err != nil {
-		jsonError(w, "set env: "+err.Error(), http.StatusInternalServerError)
+	if err := s.secrets.Set(req.Key, req.Value); err != nil {
+		jsonError(w, "set secret: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -245,8 +247,8 @@ func (s *Server) deleteSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := RemoveEnvPersistent(req.Key); err != nil {
-		jsonError(w, "remove env: "+err.Error(), http.StatusInternalServerError)
+	if err := s.secrets.Remove(req.Key); err != nil {
+		jsonError(w, "remove secret: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
