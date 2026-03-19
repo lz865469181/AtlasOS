@@ -108,7 +108,12 @@ func (c *Channel) readLoop() {
 			go c.Reconnect(context.Background())
 			return
 		}
-		var hdr struct{ Header struct{ EventID, EventType string `json:"event_id"` } `json:"header"` }
+		var hdr struct {
+		Header struct {
+			EventID   string `json:"event_id"`
+			EventType string `json:"event_type"`
+		} `json:"header"`
+	}
 		json.Unmarshal(data, &hdr)
 		if hdr.Header.EventID != "" {
 			if _, dup := c.seen.LoadOrStore(hdr.Header.EventID, true); dup {

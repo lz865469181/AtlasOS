@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -15,6 +16,7 @@ type WSServer struct {
 	router   *Router
 	upgrader websocket.Upgrader
 	clients  sync.Map
+	server   *http.Server
 }
 
 func NewWSServer(addr string, router *Router) *WSServer {
@@ -39,8 +41,16 @@ func (s *WSServer) Start() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", s.handle)
 	mux.HandleFunc("/", s.handle)
+	s.server = &http.Server{Addr: s.addr, Handler: mux}
 	log.Printf("[ws] listening on %s", s.addr)
-	return http.ListenAndServe(s.addr, mux)
+	return s.server.ListenAndServe()
+}
+
+func (s *WSServer) Shutdown(ctx context.Context) error {
+	if s.server != nil {
+		return s.server.Shutdown(ctx)
+	}
+	return nil
 }
 
 func (s *WSServer) handle(w http.ResponseWriter, r *http.Request) {
@@ -62,7 +72,7 @@ func (s *WSServer) handle(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if wsMsg.Type == "channel.message" {
-			reply := s.router.HandleMessage(nil, channel.ChannelMessage{
+			reply := s.router.HandleMessage(context.Background(), channel.ChannelMessage{
 				Platform: wsMsg.Channel, UserID: wsMsg.UserID, ChatID: wsMsg.ChatID,
 				ChatType: wsMsg.ChatType, Content: wsMsg.Content, MessageID: wsMsg.MessageID,
 			})

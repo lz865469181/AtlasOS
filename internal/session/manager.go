@@ -12,14 +12,20 @@ import (
 var sessionCounter uint64
 
 type Manager struct {
-	store    Store
-	ttl      time.Duration
-	mu       sync.RWMutex
-	stopChan chan struct{}
+	store      Store
+	ttl        time.Duration
+	maxSessions int
+	mu         sync.RWMutex
+	stopChan   chan struct{}
 }
 
 func NewManager(store Store, ttl time.Duration) *Manager {
 	return &Manager{store: store, ttl: ttl, stopChan: make(chan struct{})}
+}
+
+// SetMaxSessions sets the maximum session limit. Fix: NFR-02.
+func (m *Manager) SetMaxSessions(max int) {
+	m.maxSessions = max
 }
 
 func SessionKey(msg channel.ChannelMessage) string {
@@ -31,7 +37,7 @@ func (m *Manager) GetOrCreate(msg channel.ChannelMessage, agentID string) *Sessi
 	m.mu.RLock()
 	sess, ok := m.store.Get(key)
 	m.mu.RUnlock()
-	if ok && !sess.IsExpired(m.ttl) && sess.State == StateActive {
+	if ok && !sess.IsExpired(m.ttl) && (sess.State == StateActive || sess.State == StatePaused) {
 		sess.mu.Lock()
 		sess.LastActiveAt = time.Now()
 		sess.mu.Unlock()
@@ -39,13 +45,38 @@ func (m *Manager) GetOrCreate(msg channel.ChannelMessage, agentID string) *Sessi
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if sess, ok := m.store.Get(key); ok && !sess.IsExpired(m.ttl) && sess.State == StateActive {
+	if sess, ok := m.store.Get(key); ok && !sess.IsExpired(m.ttl) && (sess.State == StateActive || sess.State == StatePaused) {
 		return sess
 	}
+
+	// Fix: Enforce MaxSessions
+	if m.maxSessions > 0 && m.store.Count() >= m.maxSessions {
+		m.evictOldest()
+	}
+
 	id := fmt.Sprintf("sess-%d-%d", time.Now().UnixNano(), atomic.AddUint64(&sessionCounter, 1))
 	newSess := NewSession(id, agentID, msg.UserID, msg)
 	m.store.Put(key, newSess)
 	return newSess
+}
+
+// GetActiveSession follows the session tree to the deepest active child.
+// Fix #5: When parent is paused, route to the active child session.
+func (m *Manager) GetActiveSession(sess *Session) *Session {
+	if sess.State == StateActive {
+		return sess
+	}
+	// Parent is paused — find active child
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, childID := range sess.Children {
+		child := m.findByID(childID)
+		if child != nil && child.State == StateActive {
+			return child
+		}
+	}
+	// No active child found, return original
+	return sess
 }
 
 func (m *Manager) Get(key string) (*Session, bool) {
@@ -57,12 +88,7 @@ func (m *Manager) Get(key string) (*Session, bool) {
 func (m *Manager) GetByID(id string) *Session {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	for _, s := range m.store.List() {
-		if s.ID == id {
-			return s
-		}
-	}
-	return nil
+	return m.findByID(id)
 }
 
 func (m *Manager) Fork(parentKey, branchName string) (*Session, error) {
@@ -151,7 +177,8 @@ func (m *Manager) StartCleanupLoop(interval time.Duration) {
 	}()
 }
 
-func (m *Manager) Stop()           { close(m.stopChan) }
+func (m *Manager) Stop() { close(m.stopChan) }
+
 func (m *Manager) ActiveCount() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -171,4 +198,23 @@ func (m *Manager) findByID(id string) *Session {
 		}
 	}
 	return nil
+}
+
+// evictOldest removes the oldest idle session to make room. Caller must hold lock.
+func (m *Manager) evictOldest() {
+	var oldestKey string
+	var oldestTime time.Time
+	for _, k := range m.store.ListKeys() {
+		s, ok := m.store.Get(k)
+		if !ok {
+			continue
+		}
+		if oldestKey == "" || s.LastActiveAt.Before(oldestTime) {
+			oldestKey = k
+			oldestTime = s.LastActiveAt
+		}
+	}
+	if oldestKey != "" {
+		m.store.Delete(oldestKey)
+	}
 }

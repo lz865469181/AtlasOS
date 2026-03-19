@@ -1,4 +1,4 @@
-.PHONY: build build-linux build-windows test clean run
+.PHONY: build build-linux build-windows test clean run deploy
 
 BINARY=feishu-ai-assistant
 
@@ -15,3 +15,6 @@ clean:
 	rm -rf bin/
 run: build
 	./bin/$(BINARY) --config config.json
+
+deploy:
+	bash scripts/deploy.sh
