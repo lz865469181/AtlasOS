@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Feishu AI Assistant — Config Console</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #242836;
+    --border: #2e3348;
+    --text: #e1e4ed;
+    --text2: #8b90a0;
+    --accent: #6366f1;
+    --accent-hover: #818cf8;
+    --danger: #ef4444;
+    --danger-hover: #f87171;
+    --success: #22c55e;
+    --warning: #f59e0b;
+    --radius: 8px;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+  .header { display:flex; align-items:center; justify-content:space-between; padding: 16px 24px; border-bottom: 1px solid var(--border); background: var(--surface); }
+  .header h1 { font-size: 18px; font-weight: 600; }
+  .header h1 span { color: var(--accent); }
+  .status-bar { display:flex; gap:12px; align-items:center; font-size:13px; color: var(--text2); }
+  .status-dot { width:8px; height:8px; border-radius:50%; background: var(--success); display:inline-block; }
+  .status-dot.offline { background: var(--danger); }
+
+  .tabs { display:flex; gap:0; padding: 0 24px; background: var(--surface); border-bottom: 1px solid var(--border); }
+  .tab { padding: 12px 20px; cursor:pointer; color: var(--text2); font-size:14px; font-weight:500; border-bottom: 2px solid transparent; transition: all .15s; }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  .content { max-width: 960px; margin: 24px auto; padding: 0 24px; }
+  .panel { display:none; }
+  .panel.active { display:block; }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-bottom: 16px; }
+  .card h2 { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
+  .card h3 { font-size: 13px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 8px; }
+
+  .form-group { margin-bottom: 12px; }
+  .form-group label { display:block; font-size:13px; color: var(--text2); margin-bottom: 4px; }
+  .form-group input, .form-group select, .form-group textarea {
+    width:100%; padding: 8px 12px; background: var(--surface2); border: 1px solid var(--border);
+    border-radius: var(--radius); color: var(--text); font-size:14px; font-family: inherit;
+    outline:none; transition: border-color .15s;
+  }
+  .form-group input:focus, .form-group textarea:focus { border-color: var(--accent); }
+  .form-group textarea { min-height: 200px; font-family: 'Cascadia Code', 'Fira Code', monospace; font-size:13px; resize:vertical; }
+
+  /* Tree config editor */
+  .tree-section { margin-bottom: 4px; }
+  .tree-header { display:flex; align-items:center; gap:8px; padding:8px 12px; cursor:pointer; border-radius: var(--radius); transition: background .1s; user-select:none; }
+  .tree-header:hover { background: var(--surface2); }
+  .tree-arrow { font-size:10px; color: var(--text2); transition: transform .15s; width:14px; text-align:center; flex-shrink:0; }
+  .tree-arrow.open { transform: rotate(90deg); }
+  .tree-icon { font-size:14px; flex-shrink:0; }
+  .tree-label { font-size:14px; font-weight:600; flex:1; }
+  .tree-badge { font-size:11px; padding:1px 8px; border-radius:10px; background: var(--surface2); color: var(--text2); }
+  .tree-children { padding-left:20px; border-left:1px solid var(--border); margin-left:18px; overflow:hidden; }
+  .tree-children.collapsed { display:none; }
+
+  .tree-field { display:flex; align-items:center; gap:10px; padding:6px 12px 6px 44px; min-height:36px; }
+  .tree-field-key { font-size:13px; color: var(--text2); min-width:180px; font-family: 'Cascadia Code','Fira Code',monospace; flex-shrink:0; }
+  .tree-field-value { flex:1; }
+  .tree-field-value input, .tree-field-value select {
+    width:100%; padding:5px 10px; background: var(--surface2); border:1px solid var(--border);
+    border-radius:6px; color: var(--text); font-size:13px; font-family: 'Cascadia Code','Fira Code',monospace;
+    outline:none; transition: border-color .15s;
+  }
+  .tree-field-value input:focus { border-color: var(--accent); }
+  .tree-field-value input.secret-field { color: var(--warning); }
+  .tree-field-type { font-size:11px; color: var(--text2); opacity:.5; min-width:50px; text-align:right; }
+
+  .tree-array-tag { display:inline-flex; align-items:center; gap:4px; padding:3px 8px; background: var(--surface2);
+    border:1px solid var(--border); border-radius:14px; font-size:12px; font-family: monospace; color: var(--text); margin:2px; }
+  .tree-array-tag .remove-tag { cursor:pointer; color: var(--text2); font-size:14px; line-height:1; }
+  .tree-array-tag .remove-tag:hover { color: var(--danger); }
+  .tree-array-wrap { display:flex; flex-wrap:wrap; gap:4px; align-items:center; flex:1; }
+  .tree-array-input { width:120px !important; padding:3px 8px !important; font-size:12px !important; }
+  .tree-add-tag { cursor:pointer; color: var(--accent); font-size:18px; line-height:1; padding:2px 4px; }
+  .tree-add-tag:hover { color: var(--accent-hover); }
+
+  .btn { padding: 8px 16px; border:none; border-radius: var(--radius); font-size:14px; font-weight:500; cursor:pointer; transition: all .15s; }
+  .btn-primary { background: var(--accent); color:#fff; }
+  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
+  .btn-danger:hover { background: var(--danger); color:#fff; }
+  .btn-sm { padding: 5px 12px; font-size:13px; }
+  .btn:disabled { opacity:.5; cursor:not-allowed; }
+
+  .btn-group { display:flex; gap:8px; margin-top:16px; }
+
+  .secret-row { display:flex; align-items:center; gap:12px; padding:10px 0; border-bottom:1px solid var(--border); }
+  .secret-row:last-child { border-bottom:none; }
+  .secret-key { font-family: monospace; font-size:13px; min-width:200px; font-weight:500; }
+  .secret-val { font-family: monospace; font-size:13px; color: var(--text2); flex:1; }
+  .secret-badge { font-size:11px; padding:2px 8px; border-radius:10px; font-weight:600; }
+  .secret-badge.set { background: rgba(34,197,94,.15); color: var(--success); }
+  .secret-badge.unset { background: rgba(239,68,68,.15); color: var(--danger); }
+
+  .set-secret-form { display:flex; gap:8px; padding: 12px 0; align-items:flex-end; }
+  .set-secret-form .form-group { margin:0; flex:1; }
+  .set-secret-form .form-group:first-child { max-width: 220px; }
+
+  .toast { position:fixed; bottom:24px; right:24px; padding:12px 20px; border-radius: var(--radius);
+    font-size:14px; font-weight:500; color:#fff; opacity:0; transform:translateY(10px);
+    transition: all .3s; z-index:100; }
+  .toast.show { opacity:1; transform:translateY(0); }
+  .toast.success { background: var(--success); }
+  .toast.error { background: var(--danger); }
+
+  .status-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); gap:12px; }
+  .status-item { padding:12px; background: var(--surface2); border-radius: var(--radius); }
+  .status-item .label { font-size:12px; color: var(--text2); margin-bottom:4px; }
+  .status-item .value { font-size:16px; font-weight:600; }
+
+  /* Monitor tab */
+  .monitor-split { display:flex; flex-direction:column; gap:16px; }
+  .log-container { background: var(--surface); border:1px solid var(--border); border-radius: var(--radius); display:flex; flex-direction:column; height:380px; }
+  .log-toolbar { display:flex; align-items:center; gap:8px; padding:10px 16px; border-bottom:1px solid var(--border); flex-shrink:0; }
+  .log-toolbar h3 { margin:0; font-size:14px; font-weight:600; flex:1; }
+  .log-toolbar select { padding:4px 8px; background:var(--surface2); border:1px solid var(--border); border-radius:6px; color:var(--text); font-size:12px; }
+  .log-scroll { flex:1; overflow-y:auto; padding:8px 16px; font-family:'Cascadia Code','Fira Code',monospace; font-size:12px; line-height:1.6; }
+  .log-line { white-space:pre-wrap; word-break:break-all; padding:1px 0; }
+  .log-line .log-ts { color:var(--text2); margin-right:8px; }
+  .log-line.level-error { color:#f87171; }
+  .log-line.level-warn { color:#fbbf24; }
+  .log-line.level-fatal { color:#ef4444; font-weight:700; }
+  .log-line.level-debug { color:var(--text2); }
+  .log-line.level-info { color:var(--text); }
+
+  .msg-container { background: var(--surface); border:1px solid var(--border); border-radius: var(--radius); }
+  .msg-toolbar { display:flex; align-items:center; gap:8px; padding:10px 16px; border-bottom:1px solid var(--border); }
+  .msg-toolbar h3 { margin:0; font-size:14px; font-weight:600; flex:1; }
+  .msg-list { max-height:400px; overflow-y:auto; padding:12px 16px; }
+  .msg-item { padding:10px 14px; border-radius:var(--radius); margin-bottom:8px; position:relative; }
+  .msg-item.msg-in { background:rgba(99,102,241,.1); border-left:3px solid var(--accent); }
+  .msg-item.msg-out { background:rgba(34,197,94,.08); border-left:3px solid var(--success); }
+  .msg-meta { display:flex; gap:10px; font-size:11px; color:var(--text2); margin-bottom:6px; align-items:center; }
+  .msg-meta .msg-dir { font-weight:700; text-transform:uppercase; font-size:10px; padding:1px 6px; border-radius:4px; }
+  .msg-in .msg-dir { background:rgba(99,102,241,.2); color:var(--accent); }
+  .msg-out .msg-dir { background:rgba(34,197,94,.15); color:var(--success); }
+  .msg-text { font-size:13px; line-height:1.5; white-space:pre-wrap; word-break:break-word; }
+  .msg-empty { text-align:center; color:var(--text2); padding:40px; font-size:14px; }
+
+  .sse-status { font-size:11px; padding:2px 8px; border-radius:10px; }
+  .sse-status.connected { background:rgba(34,197,94,.15); color:var(--success); }
+  .sse-status.disconnected { background:rgba(239,68,68,.15); color:var(--danger); }
+
+  @media(max-width:600px) {
+    .secret-row { flex-wrap:wrap; }
+    .set-secret-form { flex-wrap:wrap; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1><span>Feishu AI</span> Config Console</h1>
+  <div class="status-bar">
+    <span class="status-dot" id="statusDot"></span>
+    <span id="statusText">Connecting...</span>
+    <span id="uptimeText"></span>
+    <button class="btn btn-sm btn-danger" onclick="restartServer()" style="margin-left:8px;">Restart</button>
+  </div>
+</div>
+
+<div class="tabs">
+  <div class="tab active" data-panel="monitor">Monitor</div>
+  <div class="tab" data-panel="config">Configuration</div>
+  <div class="tab" data-panel="secrets">Secrets</div>
+  <div class="tab" data-panel="status">Status</div>
+</div>
+
+<div class="content">
+  <!-- Config Panel -->
+  <div class="panel" id="panel-config">
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <h2 style="margin-bottom:0;">Configuration</h2>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <button class="btn btn-sm" style="background:var(--surface2);color:var(--text2);" onclick="toggleRawEditor();" id="toggleRawBtn">Raw JSON</button>
+        </div>
+      </div>
+      <p style="color:var(--text2);font-size:13px;margin-bottom:16px;">
+        Secret fields are highlighted in <span style="color:var(--warning);">orange</span> — use <code style="background:var(--surface2);padding:2px 6px;border-radius:4px;">${ENV_VAR}</code> placeholders.
+      </p>
+      <div id="treeEditor"></div>
+      <div id="rawEditorWrap" style="display:none;">
+        <div class="form-group">
+          <textarea id="configEditor" spellcheck="false"></textarea>
+        </div>
+      </div>
+      <div class="btn-group">
+        <button class="btn btn-primary" onclick="saveConfig()">Save Configuration</button>
+        <button class="btn btn-danger" onclick="loadConfig()">Revert</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Secrets Panel -->
+  <div class="panel" id="panel-secrets">
+    <div class="card">
+      <h2>Secrets</h2>
+      <p style="color:var(--text2);font-size:13px;margin-bottom:16px;">
+        Secrets are stored AES-256 encrypted in config.json using a machine-derived key. Values are never exposed — only masked previews are shown.
+      </p>
+      <div id="secretsList"></div>
+    </div>
+    <div class="card">
+      <h2>Set Secret</h2>
+      <div class="set-secret-form">
+        <div class="form-group">
+          <label>Variable Name</label>
+          <input id="secretKey" placeholder="FEISHU_APP_SECRET" pattern="[A-Z_]+" />
+        </div>
+        <div class="form-group">
+          <label>Value</label>
+          <input id="secretValue" type="password" placeholder="Enter secret value" />
+        </div>
+        <button class="btn btn-primary" onclick="setSecret()">Set</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Monitor Panel -->
+  <div class="panel active" id="panel-monitor">
+    <div class="monitor-split">
+      <div class="log-container">
+        <div class="log-toolbar">
+          <h3>Live Logs</h3>
+          <span class="sse-status disconnected" id="sseStatus">disconnected</span>
+          <select id="logLevelFilter" onchange="applyLogFilter()">
+            <option value="all">All Levels</option>
+            <option value="error">Error+</option>
+            <option value="warn">Warn+</option>
+            <option value="info" selected>Info+</option>
+            <option value="debug">Debug</option>
+          </select>
+          <button class="btn btn-sm" style="background:var(--surface2);color:var(--text2);" onclick="toggleLogPause();" id="logPauseBtn">Pause</button>
+          <button class="btn btn-sm" style="background:var(--surface2);color:var(--text2);" onclick="clearLogs();">Clear</button>
+        </div>
+        <div class="log-scroll" id="logScroll"></div>
+      </div>
+
+      <div class="msg-container">
+        <div class="msg-toolbar">
+          <h3>Messages</h3>
+          <button class="btn btn-sm" style="background:var(--surface2);color:var(--text2);" onclick="clearMessages();">Clear</button>
+        </div>
+        <div class="msg-list" id="msgList">
+          <div class="msg-empty" id="msgEmpty">No messages yet. Waiting for @bot mentions...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Status Panel -->
+  <div class="panel" id="panel-status">
+    <div class="card">
+      <h2>System Status</h2>
+      <div class="status-grid" id="statusGrid"></div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let csrfToken = '';
+let configData = {};
+let rawMode = false;
+
+const SECTION_ICONS = {
+  gateway:'&#x1f310;', channels:'&#x1f4e1;', agent:'&#x1f916;',
+  memory:'&#x1f4be;', logging:'&#x1f4dd;', health:'&#x2764;', webui:'&#x1f5a5;',
+  feishu:'&#x1f426;', telegram:'&#x2708;', discord:'&#x1f3ae;', dingtalk:'&#x1f514;',
+  bash:'&#x1f4bb;', compaction:'&#x1f5dc;'
+};
+const SECRET_FIELDS = ['secret','token','password','api_key','apikey','app_key'];
+
+function isSecretKey(key) {
+  const l = key.toLowerCase();
+  return SECRET_FIELDS.some(p => l.includes(p));
+}
+
+// --- CSRF ---
+function getCookie(name) {
+  const m = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
+  return m ? m[2] : '';
+}
+function refreshCSRF() { csrfToken = getCookie('csrf_token'); }
+function apiHeaders() { refreshCSRF(); return { 'Content-Type':'application/json', 'X-CSRF-Token': csrfToken }; }
+
+// --- Tabs ---
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('panel-' + tab.dataset.panel).classList.add('active');
+  });
+});
+
+// --- Toast ---
+function showToast(msg, type) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast ' + type + ' show';
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+// --- Toggle raw/tree ---
+function toggleRawEditor() {
+  rawMode = !rawMode;
+  document.getElementById('treeEditor').style.display = rawMode ? 'none' : 'block';
+  document.getElementById('rawEditorWrap').style.display = rawMode ? 'block' : 'none';
+  document.getElementById('toggleRawBtn').textContent = rawMode ? 'Tree View' : 'Raw JSON';
+  if (rawMode) {
+    // Collect tree values into configData, then show as JSON
+    collectTreeValues();
+    document.getElementById('configEditor').value = JSON.stringify(configData, null, 2);
+  } else {
+    // Parse raw JSON back, render tree
+    try {
+      configData = JSON.parse(document.getElementById('configEditor').value);
+    } catch(e) { /* keep existing */ }
+    renderTree(configData);
+  }
+}
+
+// --- Tree Editor ---
+function renderTree(data) {
+  const container = document.getElementById('treeEditor');
+  container.innerHTML = '';
+  for (const [key, val] of Object.entries(data)) {
+    if (val && typeof val === 'object' && !Array.isArray(val)) {
+      container.appendChild(buildSection(key, val, [key]));
+    } else {
+      container.appendChild(buildField(key, val, [key]));
+    }
+  }
+}
+
+function buildSection(key, obj, path) {
+  const section = document.createElement('div');
+  section.className = 'tree-section';
+
+  const header = document.createElement('div');
+  header.className = 'tree-header';
+  const icon = SECTION_ICONS[key] || '&#x1f4c1;';
+  const childCount = Object.keys(obj).length;
+  header.innerHTML = `<span class="tree-arrow open">&#9654;</span>` +
+    `<span class="tree-icon">${icon}</span>` +
+    `<span class="tree-label">${esc(key)}</span>` +
+    `<span class="tree-badge">${childCount} fields</span>`;
+
+  const children = document.createElement('div');
+  children.className = 'tree-children';
+
+  header.addEventListener('click', () => {
+    children.classList.toggle('collapsed');
+    header.querySelector('.tree-arrow').classList.toggle('open');
+  });
+
+  for (const [k, v] of Object.entries(obj)) {
+    const childPath = [...path, k];
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      children.appendChild(buildSection(k, v, childPath));
+    } else {
+      children.appendChild(buildField(k, v, childPath));
+    }
+  }
+
+  section.appendChild(header);
+  section.appendChild(children);
+  return section;
+}
+
+function buildField(key, value, path) {
+  const row = document.createElement('div');
+  row.className = 'tree-field';
+
+  const keyEl = document.createElement('span');
+  keyEl.className = 'tree-field-key';
+  keyEl.textContent = key;
+
+  const valWrap = document.createElement('div');
+  valWrap.className = 'tree-field-value';
+
+  const typeEl = document.createElement('span');
+  typeEl.className = 'tree-field-type';
+
+  const pathAttr = path.join('.');
+  const secret = isSecretKey(key);
+
+  if (Array.isArray(value)) {
+    typeEl.textContent = 'array';
+    valWrap.appendChild(buildArrayEditor(value, pathAttr));
+  } else if (typeof value === 'boolean') {
+    typeEl.textContent = 'bool';
+    const sel = document.createElement('select');
+    sel.dataset.path = pathAttr;
+    sel.dataset.type = 'boolean';
+    sel.innerHTML = `<option value="true" ${value?'selected':''}>true</option><option value="false" ${!value?'selected':''}>false</option>`;
+    valWrap.appendChild(sel);
+  } else if (typeof value === 'number') {
+    typeEl.textContent = 'number';
+    const inp = document.createElement('input');
+    inp.type = 'number';
+    inp.value = value;
+    inp.dataset.path = pathAttr;
+    inp.dataset.type = 'number';
+    valWrap.appendChild(inp);
+  } else {
+    typeEl.textContent = 'string';
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.value = value == null ? '' : String(value);
+    inp.dataset.path = pathAttr;
+    inp.dataset.type = 'string';
+    if (secret) inp.classList.add('secret-field');
+    valWrap.appendChild(inp);
+  }
+
+  row.appendChild(keyEl);
+  row.appendChild(valWrap);
+  row.appendChild(typeEl);
+  return row;
+}
+
+function buildArrayEditor(arr, pathAttr) {
+  const wrap = document.createElement('div');
+  wrap.className = 'tree-array-wrap';
+  wrap.dataset.path = pathAttr;
+  wrap.dataset.type = 'array';
+
+  arr.forEach((item, i) => {
+    wrap.appendChild(makeTag(String(item), pathAttr));
+  });
+
+  // Add input + button
+  const addInput = document.createElement('input');
+  addInput.className = 'tree-array-input';
+  addInput.placeholder = 'add...';
+  addInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && addInput.value.trim()) {
+      wrap.insertBefore(makeTag(addInput.value.trim(), pathAttr), addInput);
+      addInput.value = '';
+    }
+  });
+  wrap.appendChild(addInput);
+
+  const addBtn = document.createElement('span');
+  addBtn.className = 'tree-add-tag';
+  addBtn.innerHTML = '+';
+  addBtn.title = 'Add item';
+  addBtn.addEventListener('click', () => {
+    if (addInput.value.trim()) {
+      wrap.insertBefore(makeTag(addInput.value.trim(), pathAttr), addInput);
+      addInput.value = '';
+    }
+  });
+  wrap.appendChild(addBtn);
+
+  return wrap;
+}
+
+function makeTag(text, pathAttr) {
+  const tag = document.createElement('span');
+  tag.className = 'tree-array-tag';
+  tag.innerHTML = esc(text) + ' <span class="remove-tag">&times;</span>';
+  tag.querySelector('.remove-tag').addEventListener('click', () => tag.remove());
+  return tag;
+}
+
+// --- Collect values from tree back to configData ---
+function collectTreeValues() {
+  // Scalar fields
+  document.querySelectorAll('#treeEditor input[data-path], #treeEditor select[data-path]').forEach(el => {
+    const path = el.dataset.path.split('.');
+    const type = el.dataset.type;
+    let val;
+    if (type === 'boolean') val = el.value === 'true';
+    else if (type === 'number') val = Number(el.value);
+    else val = el.value;
+    setNestedValue(configData, path, val);
+  });
+  // Array fields
+  document.querySelectorAll('#treeEditor .tree-array-wrap[data-path]').forEach(wrap => {
+    const path = wrap.dataset.path.split('.');
+    const tags = wrap.querySelectorAll('.tree-array-tag');
+    const arr = [];
+    tags.forEach(tag => {
+      // Text content minus the × button
+      const text = tag.firstChild.textContent.trim();
+      arr.push(text);
+    });
+    setNestedValue(configData, path, arr);
+  });
+}
+
+function setNestedValue(obj, path, value) {
+  let cur = obj;
+  for (let i = 0; i < path.length - 1; i++) {
+    if (!(path[i] in cur) || typeof cur[path[i]] !== 'object') cur[path[i]] = {};
+    cur = cur[path[i]];
+  }
+  cur[path[path.length - 1]] = value;
+}
+
+// --- Config Load/Save ---
+async function loadConfig() {
+  try {
+    const r = await fetch('/api/config');
+    if (!r.ok) throw new Error(r.statusText);
+    configData = await r.json();
+    renderTree(configData);
+    document.getElementById('configEditor').value = JSON.stringify(configData, null, 2);
+  } catch(e) { showToast('Failed to load config: ' + e.message, 'error'); }
+}
+
+async function saveConfig() {
+  let toSave;
+  if (rawMode) {
+    try { toSave = JSON.parse(document.getElementById('configEditor').value); } catch(e) {
+      showToast('Invalid JSON: ' + e.message, 'error'); return;
+    }
+  } else {
+    collectTreeValues();
+    toSave = configData;
+  }
+  try {
+    const r = await fetch('/api/config', { method:'POST', headers: apiHeaders(), body: JSON.stringify(toSave) });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    showToast('Configuration saved', 'success');
+    loadConfig();
+  } catch(e) { showToast('Save failed: ' + e.message, 'error'); }
+}
+
+// --- Secrets ---
+async function loadSecrets() {
+  try {
+    const r = await fetch('/api/secrets');
+    if (!r.ok) throw new Error(r.statusText);
+    const data = await r.json();
+    const list = document.getElementById('secretsList');
+    list.innerHTML = data.map(s => `
+      <div class="secret-row">
+        <span class="secret-key">${esc(s.key)}</span>
+        <span class="secret-val">${esc(s.masked)}</span>
+        <span class="secret-badge ${s.is_set ? 'set' : 'unset'}">${s.is_set ? 'SET' : 'NOT SET'}</span>
+        ${s.is_set ? `<button class="btn btn-danger btn-sm" onclick="removeSecret('${esc(s.key)}')">Remove</button>` : ''}
+      </div>
+    `).join('');
+  } catch(e) { showToast('Failed to load secrets: ' + e.message, 'error'); }
+}
+
+async function setSecret() {
+  const key = document.getElementById('secretKey').value.trim();
+  const value = document.getElementById('secretValue').value;
+  if (!key || !value) { showToast('Key and value required', 'error'); return; }
+  if (!/^[A-Z][A-Z0-9_]*$/.test(key)) { showToast('Key must be UPPER_SNAKE_CASE', 'error'); return; }
+  try {
+    const r = await fetch('/api/secrets', { method:'POST', headers: apiHeaders(), body: JSON.stringify({key, value}) });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    document.getElementById('secretKey').value = '';
+    document.getElementById('secretValue').value = '';
+    showToast('Secret set successfully', 'success');
+    loadSecrets();
+  } catch(e) { showToast('Failed: ' + e.message, 'error'); }
+}
+
+async function removeSecret(key) {
+  if (!confirm('Remove ' + key + '? This clears the encrypted value from config.json.')) return;
+  try {
+    const r = await fetch('/api/secrets', { method:'DELETE', headers: apiHeaders(), body: JSON.stringify({key}) });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    showToast('Secret removed', 'success');
+    loadSecrets();
+  } catch(e) { showToast('Failed: ' + e.message, 'error'); }
+}
+
+// --- Status ---
+async function loadStatus() {
+  try {
+    const r = await fetch('/api/status');
+    if (!r.ok) throw new Error(r.statusText);
+    const data = await r.json();
+    document.getElementById('statusDot').className = 'status-dot';
+    document.getElementById('statusText').textContent = 'Connected';
+    document.getElementById('uptimeText').textContent = 'Uptime: ' + formatUptime(data.uptime_seconds);
+    document.getElementById('statusGrid').innerHTML = Object.entries(data).map(([k,v]) => `
+      <div class="status-item">
+        <div class="label">${esc(k.replace(/_/g,' '))}</div>
+        <div class="value">${esc(String(v))}</div>
+      </div>
+    `).join('');
+  } catch(e) {
+    document.getElementById('statusDot').className = 'status-dot offline';
+    document.getElementById('statusText').textContent = 'Disconnected';
+  }
+}
+
+function formatUptime(sec) {
+  if (!sec) return '0s';
+  const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60), s = sec%60;
+  return (h?h+'h ':'') + (m?m+'m ':'') + s+'s';
+}
+
+// --- Monitor: SSE + Logs + Messages ---
+let eventSource = null;
+let logPaused = false;
+let logBuffer = [];
+const MAX_LOG_LINES = 500;
+const LOG_LEVELS = { fatal:0, error:1, warn:2, info:3, debug:4 };
+
+function connectSSE() {
+  if (eventSource) { eventSource.close(); }
+  eventSource = new EventSource('/api/events');
+  eventSource.onopen = () => {
+    document.getElementById('sseStatus').textContent = 'connected';
+    document.getElementById('sseStatus').className = 'sse-status connected';
+  };
+  // Named SSE events
+  eventSource.addEventListener('log', (ev) => {
+    try { appendLog(JSON.parse(ev.data)); } catch(err) {}
+  });
+  eventSource.addEventListener('message', (ev) => {
+    try { appendMessage(JSON.parse(ev.data)); } catch(err) {}
+  });
+  eventSource.addEventListener('error', (ev) => {
+    try { appendLog({ level:'error', content: JSON.parse(ev.data).error, ts: new Date().toISOString() }); } catch(err) {}
+  });
+  eventSource.onerror = () => {
+    document.getElementById('sseStatus').textContent = 'disconnected';
+    document.getElementById('sseStatus').className = 'sse-status disconnected';
+  };
+}
+
+function appendLog(e) {
+  logBuffer.push(e);
+  if (logBuffer.length > MAX_LOG_LINES) logBuffer.shift();
+  if (logPaused) return;
+  const level = (e.level || 'info').toLowerCase();
+  if (!shouldShowLevel(level)) return;
+  const container = document.getElementById('logScroll');
+  const line = document.createElement('div');
+  line.className = 'log-line level-' + level;
+  line.dataset.level = level;
+  const ts = e.ts ? new Date(e.ts).toLocaleTimeString() : '';
+  line.innerHTML = '<span class="log-ts">' + esc(ts) + '</span>' + esc(e.content || '');
+  container.appendChild(line);
+  // Trim DOM
+  while (container.children.length > MAX_LOG_LINES) container.removeChild(container.firstChild);
+  container.scrollTop = container.scrollHeight;
+}
+
+function shouldShowLevel(level) {
+  const filter = document.getElementById('logLevelFilter').value;
+  if (filter === 'all') return true;
+  return (LOG_LEVELS[level] || 3) <= (LOG_LEVELS[filter] || 3);
+}
+
+function applyLogFilter() {
+  const container = document.getElementById('logScroll');
+  container.innerHTML = '';
+  logBuffer.forEach(e => {
+    const level = (e.level || 'info').toLowerCase();
+    if (!shouldShowLevel(level)) return;
+    const line = document.createElement('div');
+    line.className = 'log-line level-' + level;
+    line.dataset.level = level;
+    const ts = e.ts ? new Date(e.ts).toLocaleTimeString() : '';
+    line.innerHTML = '<span class="log-ts">' + esc(ts) + '</span>' + esc(e.content || '');
+    container.appendChild(line);
+  });
+  container.scrollTop = container.scrollHeight;
+}
+
+function toggleLogPause() {
+  logPaused = !logPaused;
+  document.getElementById('logPauseBtn').textContent = logPaused ? 'Resume' : 'Pause';
+  if (!logPaused) applyLogFilter();
+}
+
+function clearLogs() {
+  logBuffer = [];
+  document.getElementById('logScroll').innerHTML = '';
+}
+
+function appendMessage(e) {
+  const list = document.getElementById('msgList');
+  const empty = document.getElementById('msgEmpty');
+  if (empty) empty.remove();
+
+  const item = document.createElement('div');
+  item.className = 'msg-item ' + (e.direction === 'in' ? 'msg-in' : 'msg-out');
+
+  const ts = e.ts ? new Date(e.ts).toLocaleTimeString() : '';
+  const dirLabel = e.direction === 'in' ? 'IN' : 'OUT';
+  const user = e.direction === 'in' ? (e.user_name || e.user_id || 'user') : 'Assistant';
+  const platform = e.platform ? ' · ' + esc(e.platform) : '';
+  const session = e.session_id ? ' · ' + esc(e.session_id.substring(0, 8)) : '';
+
+  item.innerHTML =
+    '<div class="msg-meta">' +
+      '<span class="msg-dir">' + dirLabel + '</span>' +
+      '<span>' + esc(user) + '</span>' +
+      '<span>' + esc(ts) + platform + session + '</span>' +
+    '</div>' +
+    '<div class="msg-text">' + esc(e.text || '') + '</div>';
+
+  list.appendChild(item);
+  // Keep at most 200 messages
+  while (list.children.length > 200) list.removeChild(list.firstChild);
+  list.scrollTop = list.scrollHeight;
+}
+
+function clearMessages() {
+  const list = document.getElementById('msgList');
+  list.innerHTML = '<div class="msg-empty" id="msgEmpty">No messages yet. Waiting for @bot mentions...</div>';
+}
+
+// --- Restart ---
+async function restartServer() {
+  if (!confirm('Restart the server? The service will be briefly unavailable.')) return;
+  try {
+    const r = await fetch('/api/restart', { method:'POST', headers: apiHeaders() });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    showToast('Restarting server...', 'success');
+    document.getElementById('statusDot').className = 'status-dot offline';
+    document.getElementById('statusText').textContent = 'Restarting...';
+    // Poll until the server is back
+    setTimeout(function poll() {
+      fetch('/api/status').then(r => { if (r.ok) location.reload(); else setTimeout(poll, 1000); }).catch(() => setTimeout(poll, 1000));
+    }, 2000);
+  } catch(e) { showToast('Restart failed: ' + e.message, 'error'); }
+}
+
+// --- Init ---
+loadConfig();
+loadSecrets();
+loadStatus();
+setInterval(loadStatus, 15000);
+connectSSE();
+</script>
+</body>
+</html>

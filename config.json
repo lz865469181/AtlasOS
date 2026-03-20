@@ -78,8 +78,8 @@
       "enabled": false
     },
     "feishu": {
-      "app_id": "ENC:xO2dsbjvuRCHHzxTDMtzlT1TS3/gQAy7d2HZOUc37sAuMk2XGA9i7l2zMEFwPnR8",
-      "app_secret": "ENC:6sXJWConrf2FVGHeGFgZoY2wxZhaZsRZRJg6EJvs+gV4LbNNLI1cKW1iXUlNG1+BAiIq/ILFYJW9yHS6",
+      "app_id": "${FEISHU_APP_ID}",
+      "app_secret": "${FEISHU_APP_SECRET}",
       "enabled": true,
       "ws_endpoint": "wss://open.feishu.cn/event/ws"
     },

@@ -10,3 +10,6 @@ vendor/
 .env
 *.env.local
 .feishu-ai-assistant.pid
+node_modules/
+dist/
+*.log
