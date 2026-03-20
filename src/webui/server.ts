@@ -182,8 +182,25 @@ export function startWebUI(port: number): Server {
 
   app.post("/api/restart", (_req, res) => {
     res.json({ ok: true, message: "Restarting..." });
-    // Graceful restart: exit and let process manager restart
-    setTimeout(() => process.exit(0), 500);
+    // Spawn a new process with the same entry point, then exit current
+    setTimeout(() => {
+      const { spawn } = require("node:child_process") as typeof import("node:child_process");
+      const entryScript = process.argv[1];
+      if (!entryScript) {
+        log("error", "Cannot restart: no entry script found in process.argv");
+        return;
+      }
+      // Spawn detached child with same node/tsx + script
+      const child = spawn(process.execPath, process.argv.slice(1), {
+        cwd: process.cwd(),
+        env: process.env,
+        stdio: "inherit",
+        detached: true,
+      });
+      child.unref();
+      log("info", "Spawned new process, exiting current");
+      process.exit(0);
+    }, 500);
   });
 
   const server = app.listen(port, "127.0.0.1", () => {
