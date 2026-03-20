@@ -6,6 +6,7 @@ import { ask } from "../claude/client.js";
 import { buildSystemPrompt } from "../claude/context-builder.js";
 import { emit } from "../webui/events.js";
 import { handleCommand } from "./commands.js";
+import { pickReactionEmoji } from "./sentiment.js";
 
 function log(level: string, msg: string, meta?: Record<string, unknown>): void {
   const entry = { time: new Date().toISOString(), level, msg, ...meta };
@@ -36,8 +37,8 @@ export function createRouter(deps: RouterDeps) {
 
     log("info", "Received message", { platform, userID, chatID, textLen: text.length });
 
-    // Add "processing" reaction
-    sender.addReaction(messageID, "PROCESSING").catch(() => {});
+    // Add "thinking" reaction while processing
+    sender.addReaction(messageID, "THINKING").catch(() => {});
 
     const agentID = workspace.agentID;
     const session = sessionManager.getOrCreate(agentID, userID);
@@ -48,7 +49,7 @@ export function createRouter(deps: RouterDeps) {
     // Check for slash commands (/feedback, /model, etc.)
     const cmdResult = await handleCommand({ event, sender, session, workspace });
     if (cmdResult.handled) {
-      sender.addReaction(messageID, "DONE").catch(() => {});
+      sender.addReaction(messageID, "THUMBSUP").catch(() => {});
       return;
     }
 
@@ -92,8 +93,9 @@ export function createRouter(deps: RouterDeps) {
         text: reply.slice(0, 200),
       });
 
-      // Success reaction
-      sender.addReaction(messageID, "DONE").catch(() => {});
+      // Add sentiment-based reaction emoji
+      const emoji = pickReactionEmoji(reply);
+      sender.addReaction(messageID, emoji).catch(() => {});
 
       log("info", "Sent reply", { platform, userID, replyLen: reply.length });
     } catch (err) {
