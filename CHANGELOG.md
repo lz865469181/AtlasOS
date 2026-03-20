@@ -2,6 +2,26 @@
 
 ## 2026-03-20
 
+### feat: /dev command — autonomous development agent
+
+Add `/dev` slash command that spawns a Claude CLI subprocess to autonomously plan, implement, test (TDD), and commit code changes.
+
+**Usage:**
+- `/dev <task>` — run in current project
+- `/dev --repo /path/to/project <task>` — run in specified repo
+
+**Changes:**
+
+- `src/router/dev-agent.ts` (new): Dev agent subprocess orchestrator
+  - Spawns Claude CLI with structured dev workflow prompt (4 phases)
+  - Streams stdout to detect phase markers (`[PHASE:PLANNING]`, etc.)
+  - Sends Feishu progress updates with emoji reactions per phase
+  - Reports final result with phase completion checklist
+- `src/router/commands.ts`: Added `/dev` command handler with `--repo` flag parsing
+- `docs/2026-03-20-dev-command-design.md` (new): Design specification
+
+---
+
 ### feat: sentiment-based emoji reactions
 
 Replace fixed emoji reactions with sentiment-aware responses based on reply content.

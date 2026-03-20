@@ -6,6 +6,7 @@ import type { Workspace } from "../workspace/workspace.js";
 import { modelSelectionCard } from "../platform/feishu/cards.js";
 import { spawn } from "node:child_process";
 import { getConfig } from "../config.js";
+import { spawnDevAgent } from "./dev-agent.js";
 
 function log(level: string, msg: string, meta?: Record<string, unknown>): void {
   const entry = { time: new Date().toISOString(), level, msg, ...meta };
@@ -49,6 +50,13 @@ export async function handleCommand(ctx: CommandContext): Promise<CommandResult>
   if (text.startsWith("/feedback")) {
     const feedback = text.slice("/feedback".length).trim();
     await handleFeedbackCommand(ctx, feedback);
+    return { handled: true };
+  }
+
+  // /dev [--repo <path>] <task> — spawn autonomous dev agent
+  if (text.startsWith("/dev")) {
+    const arg = text.slice("/dev".length).trim();
+    await handleDevCommand(ctx, arg);
     return { handled: true };
   }
 
@@ -225,5 +233,56 @@ async function handleFeedbackCommand(ctx: CommandContext, feedback: string): Pro
       chatID,
       `${atPrefix}Failed to start feedback analysis. Please try again.`,
     ).catch(() => {});
+  });
+}
+
+/**
+ * /dev [--repo <path>] <task> — Spawn an autonomous dev agent subprocess that
+ * plans, implements, tests (TDD), and commits code changes.
+ */
+async function handleDevCommand(ctx: CommandContext, arg: string): Promise<void> {
+  const { event, sender, workspace } = ctx;
+  const { chatID, messageID, userID, chatType } = event;
+  const atPrefix = chatType === "group" ? `<at id=${userID}></at>\n` : "";
+
+  if (!arg) {
+    await sender.sendMarkdown(
+      chatID,
+      `${atPrefix}**Usage:**\n\`/dev <task description>\`\n\`/dev --repo /path/to/project <task description>\``,
+      messageID,
+    );
+    return;
+  }
+
+  // Parse optional --repo flag
+  let workDir: string;
+  let task: string;
+
+  const repoMatch = arg.match(/^--repo\s+(\S+)\s+([\s\S]+)$/);
+  if (repoMatch) {
+    workDir = repoMatch[1]!;
+    task = repoMatch[2]!.trim();
+  } else {
+    // Default: use the project root directory
+    workDir = process.cwd();
+    task = arg;
+  }
+
+  // Acknowledge immediately
+  await sender.sendMarkdown(
+    chatID,
+    `${atPrefix}**Dev Agent Starting**\n\nTask: ${task}\nRepo: \`${workDir}\``,
+    messageID,
+  );
+
+  // Spawn the dev agent
+  spawnDevAgent({
+    task,
+    workDir,
+    chatID,
+    userID,
+    chatType,
+    sender,
+    messageID,
   });
 }
