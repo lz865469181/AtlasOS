@@ -68,7 +68,7 @@ export function getCliPath(): string {
 /**
  * Build CLI args for spawning a subprocess (used by dev-agent, feedback).
  *
- * Claude:   claude -p "prompt" --output-format json --no-session-persistence --model X --add-dir dir
+ * Claude:   claude -p --output-format json --no-session-persistence --model X --add-dir dir "prompt"
  * OpenCode: opencode run "prompt" --format json --model X
  */
 export function buildSpawnArgs(options: {
@@ -92,9 +92,9 @@ export function buildSpawnArgs(options: {
     return args;
   }
 
-  // Claude
+  // Claude: -p = --print (non-interactive), prompt is positional arg at the end
   const args = [
-    "-p", options.prompt,
+    "-p",
     "--output-format", options.outputFormat,
     "--no-session-persistence",
   ];
@@ -107,5 +107,7 @@ export function buildSpawnArgs(options: {
   for (const dir of options.addDirs ?? []) {
     args.push("--add-dir", dir);
   }
+  // Prompt as last positional argument
+  args.push(options.prompt);
   return args;
 }

@@ -11,7 +11,7 @@ export interface ClaudeResult {
 }
 
 export interface AskOptions {
-  /** The user's message (passed to -p). */
+  /** The user's message (positional argument). */
   prompt: string;
   /** System prompt (SOUL + MEMORY + history context, passed to --append-system-prompt). */
   systemPrompt?: string;
@@ -76,18 +76,18 @@ function execClaude(
   const config = getConfig();
   const cliPath = config.agent.claude_cli_path;
 
+  // -p (--print) = non-interactive mode, prompt is a positional arg at the end
   const args = [
-    "-p", prompt,
+    "-p",
     "--output-format", "json",
     "--no-session-persistence",
   ];
 
-  // Set model (e.g. --model claude-haiku-4-5-20251001)
   if (model) {
     args.push("--model", model);
   }
 
-  // Inject system context via --append-system-prompt (keeps Claude Code defaults + adds ours)
+  // Append to default system prompt (keeps Claude Code built-in + adds ours)
   if (systemPrompt) {
     args.push("--append-system-prompt", systemPrompt);
   }
@@ -95,6 +95,9 @@ function execClaude(
   for (const dir of addDirs) {
     args.push("--add-dir", dir);
   }
+
+  // Prompt must be the last positional argument
+  args.push(prompt);
 
   return new Promise((resolve, reject) => {
     const proc = execFile(
