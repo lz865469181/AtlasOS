@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { getConfig, parseDuration } from "../config.js";
+import { getCliPath, buildSpawnArgs } from "../backend/index.js";
 import type { PlatformSender } from "../platform/types.js";
 
 function log(level: string, msg: string, meta?: Record<string, unknown>): void {
@@ -95,19 +96,18 @@ export interface DevAgentOptions {
 export function spawnDevAgent(options: DevAgentOptions): void {
   const { task, workDir, chatID, userID, chatType, sender, messageID } = options;
   const config = getConfig();
-  const cliPath = config.agent.claude_cli_path;
+  const cliPath = getCliPath();
   const timeoutMs = parseDuration(config.agent.timeout);
 
   const atPrefix = chatType === "group" ? `<at id=${userID}></at>\n` : "";
   const devPrompt = buildDevPrompt(task);
 
-  const args = [
-    "-p", devPrompt,
-    "--output-format", "stream-json",
-    "--no-session-persistence",
-    "--model", "claude-sonnet-4-6",
-    "--add-dir", workDir,
-  ];
+  const args = buildSpawnArgs({
+    prompt: devPrompt,
+    outputFormat: "stream-json",
+    model: "claude-sonnet-4-6",
+    addDirs: [workDir],
+  });
 
   log("info", "Spawning dev agent", { userID, workDir, taskLen: task.length });
 

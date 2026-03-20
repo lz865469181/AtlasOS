@@ -4,14 +4,34 @@ export interface Message {
   timestamp: number;
 }
 
+import type { BackendType } from "../config.js";
+
 /** Default model for all sessions. */
 export const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
 
-/** Available models for user selection. */
-export const AVAILABLE_MODELS: Record<string, string> = {
-  "claude-haiku-4-5-20251001": "Haiku (Fast, Default)",
-  "claude-sonnet-4-6": "Sonnet (Balanced)",
-  "claude-opus-4-6": "Opus (Most Capable)",
+/** Available models per backend. */
+export const BACKEND_MODELS: Record<BackendType, Record<string, string>> = {
+  claude: {
+    "claude-haiku-4-5-20251001": "Haiku (Fast, Default)",
+    "claude-sonnet-4-6": "Sonnet (Balanced)",
+    "claude-opus-4-6": "Opus (Most Capable)",
+  },
+  opencode: {
+    "anthropic/claude-haiku-4-5-20251001": "Haiku (Fast, Default)",
+    "anthropic/claude-sonnet-4-6": "Sonnet (Balanced)",
+    "anthropic/claude-opus-4-6": "Opus (Most Capable)",
+    "openai/gpt-4o": "GPT-4o (OpenAI)",
+    "google/gemini-2.5-pro": "Gemini 2.5 Pro (Google)",
+  },
+};
+
+/** Default export for backwards compat — returns Claude models. */
+export const AVAILABLE_MODELS = BACKEND_MODELS.claude;
+
+/** Default models per backend. */
+export const DEFAULT_MODELS: Record<BackendType, string> = {
+  claude: "claude-haiku-4-5-20251001",
+  opencode: "anthropic/claude-haiku-4-5-20251001",
 };
 
 export class Session {

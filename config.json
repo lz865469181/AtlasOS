@@ -1,5 +1,6 @@
 {
   "agent": {
+    "backend": "claude",
     "anthropic_api_key": "ENC:rjrG91UDsJgq3bDgD0atSIo+UdP1u9WlutGeqcxwGdqP+xrtPL9rF8P+wVlpcHFxuLHBgrGu5h3Uzx47eeJImDCPtpFw8a2rn5cjfIGgIQ==",
     "bash": {
       "allowed_commands": [
@@ -62,6 +63,7 @@
       "json"
     ],
     "claude_cli_path": "claude",
+    "opencode_cli_path": "opencode",
     "max_concurrent_per_agent": 5,
     "max_retries": 3,
     "timeout": "120s",

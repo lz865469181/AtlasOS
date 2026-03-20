@@ -1,11 +1,12 @@
 import type { MessageEvent, PlatformSender } from "../platform/types.js";
 import type { Session } from "../session/session.js";
-import { AVAILABLE_MODELS } from "../session/session.js";
+import { BACKEND_MODELS } from "../session/session.js";
+import { getConfig } from "../config.js";
 import { buildSystemPrompt } from "../claude/context-builder.js";
 import type { Workspace } from "../workspace/workspace.js";
 import { modelSelectionCard } from "../platform/feishu/cards.js";
 import { spawn } from "node:child_process";
-import { getConfig } from "../config.js";
+import { getCliPath, buildSpawnArgs } from "../backend/index.js";
 import { spawnDevAgent } from "./dev-agent.js";
 
 function log(level: string, msg: string, meta?: Record<string, unknown>): void {
@@ -23,6 +24,8 @@ export interface CommandContext {
 export interface CommandResult {
   /** true = command was handled, don't pass to Claude */
   handled: boolean;
+  /** If set, the router should use this text instead of the original message */
+  rewrittenText?: string;
 }
 
 /** Short alias → full model ID mapping. */
@@ -46,17 +49,17 @@ export async function handleCommand(ctx: CommandContext): Promise<CommandResult>
     return { handled: true };
   }
 
-  // /feedback <content> — spawn background analysis subprocess
+  // /feedback <content> — spawn background analysis for the feedback
   if (text.startsWith("/feedback")) {
-    const feedback = text.slice("/feedback".length).trim();
-    await handleFeedbackCommand(ctx, feedback);
+    const content = text.slice("/feedback".length).trim();
+    await handleFeedbackCommand(ctx, content);
     return { handled: true };
   }
 
-  // /dev [--repo <path>] <task> — spawn autonomous dev agent
+  // /dev <task> — spawn autonomous dev agent for the task
   if (text.startsWith("/dev")) {
-    const arg = text.slice("/dev".length).trim();
-    await handleDevCommand(ctx, arg);
+    const content = text.slice("/dev".length).trim();
+    await handleDevCommand(ctx, content);
     return { handled: true };
   }
 
@@ -71,14 +74,16 @@ async function handleModelCommand(ctx: CommandContext, arg: string): Promise<voi
   const { event, sender, session } = ctx;
   const { chatID, messageID, chatType, userID } = event;
   const atPrefix = chatType === "group" ? `<at id=${userID}></at>\n` : "";
+  const backend = getConfig().agent.backend ?? "claude";
+  const models = BACKEND_MODELS[backend];
 
   // If user specified a model name, switch directly
   if (arg) {
     const modelId = MODEL_ALIASES[arg.toLowerCase()] ?? arg;
 
-    if (!AVAILABLE_MODELS[modelId]) {
+    if (!models[modelId]) {
       const available = Object.entries(MODEL_ALIASES)
-        .map(([alias, id]) => `  /${alias} → ${AVAILABLE_MODELS[id]}`)
+        .map(([alias, id]) => `  /${alias} → ${models[id]}`)
         .join("\n");
       await sender.sendText(
         chatID,
@@ -93,7 +98,7 @@ async function handleModelCommand(ctx: CommandContext, arg: string): Promise<voi
 
     await sender.sendMarkdown(
       chatID,
-      `${atPrefix}Model switched to: **${AVAILABLE_MODELS[modelId]}**\n\`${modelId}\``,
+      `${atPrefix}Model switched to: **${models[modelId]}**\n\`${modelId}\``,
       messageID,
     );
     return;
@@ -108,14 +113,14 @@ async function handleModelCommand(ctx: CommandContext, arg: string): Promise<voi
   } catch (err) {
     log("error", "Failed to send model selection card", { error: String(err) });
     // Fallback: send as text
-    const lines = Object.entries(AVAILABLE_MODELS).map(([id, label]) => {
+    const lines = Object.entries(models).map(([id, label]) => {
       const alias = Object.entries(MODEL_ALIASES).find(([, v]) => v === id)?.[0] ?? "";
       const current = id === currentModel ? " (current)" : "";
       return `- **${label}**${current}: \`/model ${alias}\``;
     });
     await sender.sendMarkdown(
       chatID,
-      `${atPrefix}**Select Model**\n\nCurrent: **${AVAILABLE_MODELS[currentModel] ?? currentModel}**\n\n${lines.join("\n")}`,
+      `${atPrefix}**Select Model**\n\nCurrent: **${models[currentModel] ?? currentModel}**\n\n${lines.join("\n")}`,
       messageID,
     );
   }
@@ -135,7 +140,9 @@ async function handleFeedbackCommand(ctx: CommandContext, feedback: string): Pro
     return;
   }
 
-  // Acknowledge immediately
+  // Instant emoji reaction (fire-and-forget), then continue processing
+  sender.addReaction(messageID, "THUMBSUP").catch(() => {});
+
   const atPrefix = chatType === "group" ? `<at id=${userID}></at>\n` : "";
   await sender.sendMarkdown(
     chatID,
@@ -144,8 +151,7 @@ async function handleFeedbackCommand(ctx: CommandContext, feedback: string): Pro
   );
 
   // Spawn background analysis subprocess
-  const config = getConfig();
-  const cliPath = config.agent.claude_cli_path;
+  const cliPath = getCliPath();
   const userDir = workspace.initUser(userID);
 
   const analysisPrompt = [
@@ -161,17 +167,13 @@ async function handleFeedbackCommand(ctx: CommandContext, feedback: string): Pro
 
   const systemPrompt = buildSystemPrompt(workspace, userID, session);
 
-  const args = [
-    "-p", analysisPrompt,
-    "--output-format", "json",
-    "--no-session-persistence",
-    "--model", "claude-sonnet-4-6", // Use Sonnet for deeper analysis
-  ];
-
-  if (systemPrompt) {
-    args.push("--append-system-prompt", systemPrompt);
-  }
-  args.push("--add-dir", userDir);
+  const args = buildSpawnArgs({
+    prompt: analysisPrompt,
+    outputFormat: "json",
+    model: "claude-sonnet-4-6",
+    systemPrompt: systemPrompt || undefined,
+    addDirs: [userDir],
+  });
 
   log("info", "Spawning feedback analysis subprocess", { userID, feedbackLen: feedback.length });
 
@@ -253,6 +255,9 @@ async function handleDevCommand(ctx: CommandContext, arg: string): Promise<void>
     );
     return;
   }
+
+  // Instant emoji reaction (fire-and-forget), then continue processing
+  sender.addReaction(messageID, "ONIT").catch(() => {});
 
   // Parse optional --repo flag
   let workDir: string;

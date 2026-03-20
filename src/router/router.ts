@@ -2,7 +2,7 @@ import type { MessageEvent, PlatformSender } from "../platform/types.js";
 import type { SessionManager } from "../session/manager.js";
 import type { SessionQueue } from "../session/queue.js";
 import type { Workspace } from "../workspace/workspace.js";
-import { ask } from "../claude/client.js";
+import { ask } from "../backend/index.js";
 import { buildSystemPrompt } from "../claude/context-builder.js";
 import { emit } from "../webui/events.js";
 import { handleCommand } from "./commands.js";
@@ -53,17 +53,21 @@ export function createRouter(deps: RouterDeps) {
       return;
     }
 
+    // If command returned rewritten text (e.g. /dev, /feedback prefix stripped),
+    // use that as the actual prompt for the CLI request
+    const promptText = cmdResult.rewrittenText ?? text;
+
     try {
       const reply = await sessionQueue.enqueue(session.id, async () => {
         // Record user message
-        session.addMessage("user", text);
+        session.addMessage("user", promptText);
 
         // Build system context (SOUL + MEMORY + history) and user prompt separately
         const systemPrompt = buildSystemPrompt(workspace, userID, session);
 
         // Call Claude CLI with session's model preference
         const result = await ask({
-          prompt: text,
+          prompt: promptText,
           systemPrompt,
           workDir: userDir,
           addDirs: [userDir],

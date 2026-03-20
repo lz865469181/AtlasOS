@@ -1,5 +1,95 @@
 import { AVAILABLE_MODELS } from "../../session/session.js";
 
+/** Permission types the bot may need to request from a user. */
+export type PermissionType = "doc" | "wiki" | "app" | "custom";
+
+interface PermissionCardOptions {
+  /** What kind of permission is needed */
+  type: PermissionType;
+  /** The user open_id to @mention in the card */
+  userOpenID: string;
+  /** Human-readable resource name, e.g. "Q3 OKR doc" */
+  resourceName: string;
+  /** URL the user can click to grant / open the resource (optional) */
+  resourceURL?: string;
+  /** Extra description shown below the title (optional) */
+  detail?: string;
+}
+
+const PERMISSION_META: Record<PermissionType, { icon: string; label: string; color: string }> = {
+  doc:   { icon: "📄", label: "Document Access",       color: "blue"   },
+  wiki:  { icon: "📚", label: "Knowledge Base Access",  color: "green"  },
+  app:   { icon: "🔑", label: "App Permission",         color: "orange" },
+  custom:{ icon: "⚙️", label: "Permission Required",    color: "purple" },
+};
+
+/**
+ * Build an interactive card that requests a specific permission from a user.
+ *
+ * Usage:
+ *   const card = permissionRequestCard({ type: "doc", userOpenID: "ou_xxx", resourceName: "设计文档" });
+ *   await sender.sendInteractiveCard(chatID, card, messageID);
+ */
+export function permissionRequestCard(opts: PermissionCardOptions): string {
+  const meta = PERMISSION_META[opts.type];
+
+  // Markdown body with @mention
+  const mentionTag = `<at id=${opts.userOpenID}></at>`;
+  let body = `${meta.icon} **${meta.label}**\n\nHi ${mentionTag}, I need access to **${opts.resourceName}** to continue.`;
+  if (opts.detail) {
+    body += `\n\n${opts.detail}`;
+  }
+
+  const actions: unknown[] = [];
+
+  // "Open Resource" button (if URL provided)
+  if (opts.resourceURL) {
+    actions.push({
+      tag: "button",
+      text: { tag: "plain_text", content: "Open & Grant Access" },
+      type: "primary",
+      url: opts.resourceURL,
+    });
+  }
+
+  // "I've Granted" callback button
+  actions.push({
+    tag: "button",
+    text: { tag: "plain_text", content: "I've Granted ✅" },
+    type: "default",
+    value: { action: "permission_granted", permission_type: opts.type, resource: opts.resourceName },
+  });
+
+  // "Ignore" button
+  actions.push({
+    tag: "button",
+    text: { tag: "plain_text", content: "Ignore" },
+    type: "default",
+    value: { action: "permission_ignored", permission_type: opts.type, resource: opts.resourceName },
+  });
+
+  const card = {
+    config: { wide_screen_mode: true },
+    header: {
+      title: { tag: "plain_text", content: `${meta.icon} ${meta.label}` },
+      template: meta.color,
+    },
+    elements: [
+      { tag: "markdown", content: body },
+      { tag: "hr" },
+      { tag: "action", actions },
+      {
+        tag: "note",
+        elements: [
+          { tag: "plain_text", content: "Please grant the requested permission, then click \"I've Granted\"." },
+        ],
+      },
+    ],
+  };
+
+  return JSON.stringify(card);
+}
+
 /**
  * Build a Feishu interactive card with markdown content.
  */

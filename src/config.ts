@@ -5,9 +5,15 @@ import { config as loadDotenv } from "dotenv";
 // Load .env before anything else
 loadDotenv();
 
+export type BackendType = "claude" | "opencode";
+
 export interface AgentConfig {
+  /** Which CLI backend to use: "claude" (default) or "opencode". */
+  backend: BackendType;
   claude_cli_path: string;
   claude_cli_args: string[];
+  /** Path to the OpenCode CLI binary. */
+  opencode_cli_path: string;
   anthropic_api_key: string;
   claude_api_key: string;
   timeout: string;
