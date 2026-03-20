@@ -5,6 +5,7 @@ import type { Workspace } from "../workspace/workspace.js";
 import { ask } from "../claude/client.js";
 import { buildSystemPrompt } from "../claude/context-builder.js";
 import { emit } from "../webui/events.js";
+import { handleCommand } from "./commands.js";
 
 function log(level: string, msg: string, meta?: Record<string, unknown>): void {
   const entry = { time: new Date().toISOString(), level, msg, ...meta };
@@ -24,7 +25,7 @@ export function createRouter(deps: RouterDeps) {
     event: MessageEvent,
     sender: PlatformSender,
   ): Promise<void> {
-    const { userID, chatID, text, messageID, platform } = event;
+    const { userID, chatID, chatType, text, messageID, platform } = event;
 
     emit("message", {
       direction: "IN",
@@ -44,6 +45,13 @@ export function createRouter(deps: RouterDeps) {
     // Ensure user workspace exists
     const userDir = workspace.initUser(userID);
 
+    // Check for slash commands (/feedback, /model, etc.)
+    const cmdResult = await handleCommand({ event, sender, session, workspace });
+    if (cmdResult.handled) {
+      sender.addReaction(messageID, "DONE").catch(() => {});
+      return;
+    }
+
     try {
       const reply = await sessionQueue.enqueue(session.id, async () => {
         // Record user message
@@ -52,12 +60,13 @@ export function createRouter(deps: RouterDeps) {
         // Build system context (SOUL + MEMORY + history) and user prompt separately
         const systemPrompt = buildSystemPrompt(workspace, userID, session);
 
-        // Call Claude CLI: -p gets user message, --append-system-prompt gets context
+        // Call Claude CLI with session's model preference
         const result = await ask({
           prompt: text,
           systemPrompt,
           workDir: userDir,
           addDirs: [userDir],
+          model: session.model,
         });
 
         const responseText = result.result || "(no response)";
@@ -68,8 +77,13 @@ export function createRouter(deps: RouterDeps) {
         return responseText;
       });
 
+      // In group chats, prepend @mention to notify the sender
+      const replyContent = chatType === "group"
+        ? `<at id=${userID}></at>\n${reply}`
+        : reply;
+
       // Send reply
-      await sender.sendMarkdown(chatID, reply, messageID);
+      await sender.sendMarkdown(chatID, replyContent, messageID);
 
       emit("message", {
         direction: "OUT",

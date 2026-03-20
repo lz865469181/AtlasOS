@@ -76,6 +76,29 @@ export class FeishuClient implements PlatformSender {
     }
   }
 
+  async sendInteractiveCard(
+    chatID: string,
+    cardJSON: string,
+    replyMessageID?: string,
+  ): Promise<void> {
+    try {
+      if (replyMessageID) {
+        await this.client.im.message.reply({
+          path: { message_id: replyMessageID },
+          data: { content: cardJSON, msg_type: "interactive" },
+        });
+      } else {
+        await this.client.im.message.create({
+          params: { receive_id_type: "chat_id" },
+          data: { receive_id: chatID, msg_type: "interactive", content: cardJSON },
+        });
+      }
+    } catch (err) {
+      log("error", "Failed to send interactive card", { chatID, error: String(err) });
+      throw err;
+    }
+  }
+
   async addReaction(messageID: string, emoji: string): Promise<void> {
     try {
       await this.client.im.messageReaction.create({

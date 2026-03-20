@@ -21,6 +21,8 @@ export interface AskOptions {
   addDirs?: string[];
   /** Max retry attempts. */
   maxRetries?: number;
+  /** Model to use (e.g. "claude-haiku-4-5-20251001"). */
+  model?: string;
 }
 
 function log(level: string, msg: string, meta?: Record<string, unknown>): void {
@@ -39,6 +41,7 @@ export async function ask(options: AskOptions): Promise<ClaudeResult> {
     workDir,
     addDirs = [],
     maxRetries = config.agent.max_retries,
+    model,
   } = options;
 
   const timeoutMs = parseDuration(config.agent.timeout);
@@ -46,7 +49,7 @@ export async function ask(options: AskOptions): Promise<ClaudeResult> {
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const result = await execClaude(prompt, systemPrompt, workDir, addDirs, timeoutMs);
+      const result = await execClaude(prompt, systemPrompt, workDir, addDirs, timeoutMs, model);
       return result;
     } catch (err) {
       lastError = err as Error;
@@ -68,6 +71,7 @@ function execClaude(
   workDir: string | undefined,
   addDirs: string[],
   timeoutMs: number,
+  model?: string,
 ): Promise<ClaudeResult> {
   const config = getConfig();
   const cliPath = config.agent.claude_cli_path;
@@ -77,6 +81,11 @@ function execClaude(
     "--output-format", "json",
     "--no-session-persistence",
   ];
+
+  // Set model (e.g. --model claude-haiku-4-5-20251001)
+  if (model) {
+    args.push("--model", model);
+  }
 
   // Inject system context via --append-system-prompt (keeps Claude Code defaults + adds ours)
   if (systemPrompt) {

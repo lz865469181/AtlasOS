@@ -1,5 +1,6 @@
 import { loadConfig, parseDuration } from "./config.js";
 import { SessionManager, SessionQueue } from "./session/index.js";
+import { AVAILABLE_MODELS } from "./session/session.js";
 import { Workspace } from "./workspace/workspace.js";
 import { FeishuAdapter } from "./platform/feishu/adapter.js";
 import { registerAdapter, allAdapters } from "./platform/registry.js";
@@ -45,6 +46,25 @@ async function main(): Promise<void> {
       config.channels.feishu.app_id,
       config.channels.feishu.app_secret,
     );
+
+    // Handle card button clicks (e.g., /model selection)
+    feishu.onCardAction(async (event, sender) => {
+      const { userID, chatID, value } = event;
+      if (value.action === "select_model") {
+        const modelId = value.model as string;
+        if (modelId && AVAILABLE_MODELS[modelId]) {
+          const agentID = workspace.agentID;
+          const session = sessionManager.getOrCreate(agentID, userID);
+          session.model = modelId;
+          log("info", "User switched model", { userID, model: modelId });
+          await sender.sendText(
+            chatID,
+            `Model switched to: ${AVAILABLE_MODELS[modelId]} (${modelId})`,
+          );
+        }
+      }
+    });
+
     registerAdapter(feishu);
   }
 

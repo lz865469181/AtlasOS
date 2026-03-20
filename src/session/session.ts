@@ -4,6 +4,16 @@ export interface Message {
   timestamp: number;
 }
 
+/** Default model for all sessions. */
+export const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
+
+/** Available models for user selection. */
+export const AVAILABLE_MODELS: Record<string, string> = {
+  "claude-haiku-4-5-20251001": "Haiku (Fast, Default)",
+  "claude-sonnet-4-6": "Sonnet (Balanced)",
+  "claude-opus-4-6": "Opus (Most Capable)",
+};
+
 export class Session {
   readonly id: string;
   readonly agentID: string;
@@ -11,6 +21,8 @@ export class Session {
   readonly conversation: Message[] = [];
   readonly createdAt: number;
   lastActiveAt: number;
+  /** The model to use for Claude CLI calls in this session. */
+  model: string = DEFAULT_MODEL;
 
   constructor(id: string, agentID: string, userID: string) {
     this.id = id;

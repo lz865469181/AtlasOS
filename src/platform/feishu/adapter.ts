@@ -1,5 +1,5 @@
 import * as lark from "@larksuiteoapi/node-sdk";
-import type { PlatformAdapter, PlatformSender, MessageHandler, MessageEvent } from "../types.js";
+import type { PlatformAdapter, PlatformSender, MessageHandler, MessageEvent, CardActionHandler } from "../types.js";
 import { FeishuClient } from "./client.js";
 
 function log(level: string, msg: string, meta?: Record<string, unknown>): void {
@@ -43,11 +43,23 @@ export class FeishuAdapter implements PlatformAdapter {
   private readonly DEDUP_MAX = 1000;
   /** Max age for incoming messages — discard if older than this (ms). */
   private readonly MAX_AGE_MS = 2 * 60 * 1000; // 2 minutes
+  /** Optional card action handler for interactive card button clicks. */
+  private cardActionHandler: CardActionHandler | null = null;
 
   constructor(appId: string, appSecret: string) {
     this.appId = appId;
     this.appSecret = appSecret;
     this.feishuClient = new FeishuClient(appId, appSecret);
+  }
+
+  /** Register a handler for interactive card button clicks (used by HTTP callback route). */
+  onCardAction(handler: CardActionHandler): void {
+    this.cardActionHandler = handler;
+  }
+
+  /** Get the registered card action handler (for use by external HTTP routes). */
+  getCardActionHandler(): CardActionHandler | null {
+    return this.cardActionHandler;
   }
 
   getSender(): PlatformSender {
