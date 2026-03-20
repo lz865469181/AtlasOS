@@ -2,6 +2,8 @@ import express from "express";
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { randomBytes } from "node:crypto";
+import { spawn } from "node:child_process";
 import { readRawConfig, writeRawConfig, getConfigPath } from "../config.js";
 import { subscribe, unsubscribe, getHistory } from "./events.js";
 import type { Server } from "node:http";
@@ -58,7 +60,6 @@ function csrfMiddleware(
 }
 
 function randomHex(bytes: number): string {
-  const { randomBytes } = require("node:crypto") as typeof import("node:crypto");
   return randomBytes(bytes).toString("hex");
 }
 
@@ -184,7 +185,6 @@ export function startWebUI(port: number): Server {
     res.json({ ok: true, message: "Restarting..." });
     // Spawn a new process with the same entry point, then exit current
     setTimeout(() => {
-      const { spawn } = require("node:child_process") as typeof import("node:child_process");
       const entryScript = process.argv[1];
       if (!entryScript) {
         log("error", "Cannot restart: no entry script found in process.argv");

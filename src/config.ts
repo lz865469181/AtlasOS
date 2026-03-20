@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { config as loadDotenv } from "dotenv";
 
@@ -148,7 +148,6 @@ export function readRawConfig(): string {
  * Write raw config JSON (for WebUI editor).
  */
 export function writeRawConfig(json: string): void {
-  const { writeFileSync } = require("node:fs") as typeof import("node:fs");
   writeFileSync(_configPath, json, "utf-8");
 }
 
