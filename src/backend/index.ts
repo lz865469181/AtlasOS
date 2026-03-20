@@ -3,6 +3,7 @@
  * based on config.agent.backend.
  */
 import { getConfig } from "../config.js";
+import { emit } from "../webui/events.js";
 import { ask as claudeAsk } from "../claude/client.js";
 import type { ClaudeResult, AskOptions as ClaudeAskOptions } from "../claude/client.js";
 import { ask as opencodeAsk } from "../opencode/client.js";
@@ -29,6 +30,8 @@ export interface BackendResult {
  */
 export async function ask(options: BackendAskOptions): Promise<BackendResult> {
   const backend = getConfig().agent.backend ?? "claude";
+
+  emit("backend", { backend, model: options.model });
 
   if (backend === "opencode") {
     return opencodeAsk({

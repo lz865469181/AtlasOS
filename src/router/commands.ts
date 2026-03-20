@@ -7,6 +7,7 @@ import type { Workspace } from "../workspace/workspace.js";
 import { modelSelectionCard } from "../platform/feishu/cards.js";
 import { spawn } from "node:child_process";
 import { getCliPath, buildSpawnArgs } from "../backend/index.js";
+import { emit } from "../webui/events.js";
 import { spawnDevAgent } from "./dev-agent.js";
 
 function log(level: string, msg: string, meta?: Record<string, unknown>): void {
@@ -95,6 +96,7 @@ async function handleModelCommand(ctx: CommandContext, arg: string): Promise<voi
 
     session.model = modelId;
     log("info", "User switched model via command", { userID, model: modelId });
+    emit("command", { command: "/model", userID, model: modelId });
 
     await sender.sendMarkdown(
       chatID,
@@ -176,6 +178,7 @@ async function handleFeedbackCommand(ctx: CommandContext, feedback: string): Pro
   });
 
   log("info", "Spawning feedback analysis subprocess", { userID, feedbackLen: feedback.length });
+  emit("feedback", { status: "started", userID, feedbackLen: feedback.length });
 
   const child = spawn(cliPath, args, {
     cwd: userDir,
@@ -194,6 +197,7 @@ async function handleFeedbackCommand(ctx: CommandContext, feedback: string): Pro
     try {
       if (code !== 0) {
         log("error", "Feedback analysis subprocess failed", { code, stderr });
+        emit("error", { source: "feedback", userID, error: stderr.slice(0, 200) });
         await sender.sendMarkdown(
           chatID,
           `${atPrefix}Feedback analysis encountered an error. Please try again later.`,
@@ -224,13 +228,16 @@ async function handleFeedbackCommand(ctx: CommandContext, feedback: string): Pro
       );
 
       log("info", "Feedback analysis completed", { userID, resultLen: analysisResult.length });
+      emit("feedback", { status: "completed", userID, resultLen: analysisResult.length });
     } catch (err) {
       log("error", "Failed to send feedback analysis result", { error: String(err) });
+      emit("error", { source: "feedback", userID, error: String(err) });
     }
   });
 
   child.on("error", async (err) => {
     log("error", "Feedback analysis subprocess error", { error: String(err) });
+    emit("error", { source: "feedback", userID, error: String(err) });
     await sender.sendMarkdown(
       chatID,
       `${atPrefix}Failed to start feedback analysis. Please try again.`,
@@ -281,6 +288,7 @@ async function handleDevCommand(ctx: CommandContext, arg: string): Promise<void>
   );
 
   // Spawn the dev agent
+  emit("dev-agent", { status: "started", userID, task: task.slice(0, 200), workDir });
   spawnDevAgent({
     task,
     workDir,

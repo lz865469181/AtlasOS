@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { getConfig, parseDuration } from "../config.js";
 import { getCliPath, buildSpawnArgs } from "../backend/index.js";
+import { emit } from "../webui/events.js";
 import type { PlatformSender } from "../platform/types.js";
 
 function log(level: string, msg: string, meta?: Record<string, unknown>): void {
@@ -138,6 +139,7 @@ export function spawnDevAgent(options: DevAgentOptions): void {
         sender.addReaction(messageID, emoji).catch(() => {});
 
         log("info", "Dev agent phase", { userID, phase });
+        emit("dev-agent", { status: "phase", userID, phase });
       }
     }
   });
@@ -149,6 +151,7 @@ export function spawnDevAgent(options: DevAgentOptions): void {
     try {
       if (code !== 0) {
         log("error", "Dev agent subprocess failed", { code, stderr: stderr.slice(0, 500) });
+        emit("error", { source: "dev-agent", userID, error: stderr.slice(0, 200) });
         await sender.sendMarkdown(
           chatID,
           `${atPrefix}**Dev Agent Failed**\n\nExit code: ${code}\n\n\`\`\`\n${stderr.slice(0, 1000)}\n\`\`\``,
@@ -184,6 +187,7 @@ export function spawnDevAgent(options: DevAgentOptions): void {
 
       sender.addReaction(messageID, statusIcon).catch(() => {});
       log("info", "Dev agent completed", { userID, allPhasesCompleted, resultLen: resultText.length });
+      emit("dev-agent", { status: "completed", userID, allPhasesCompleted, resultLen: resultText.length });
     } catch (err) {
       log("error", "Failed to send dev agent result", { error: String(err) });
     }
@@ -191,6 +195,7 @@ export function spawnDevAgent(options: DevAgentOptions): void {
 
   child.on("error", async (err) => {
     log("error", "Dev agent subprocess error", { error: String(err) });
+    emit("error", { source: "dev-agent", userID, error: String(err) });
     await sender.sendMarkdown(
       chatID,
       `${atPrefix}**Dev Agent Error**\n\nFailed to start: ${String(err)}`,

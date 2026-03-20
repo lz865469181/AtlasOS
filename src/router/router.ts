@@ -49,6 +49,7 @@ export function createRouter(deps: RouterDeps) {
     // Check for slash commands (/feedback, /model, etc.)
     const cmdResult = await handleCommand({ event, sender, session, workspace });
     if (cmdResult.handled) {
+      emit("command", { command: text.split(" ")[0], platform, userID });
       sender.addReaction(messageID, "THUMBSUP").catch(() => {});
       return;
     }
@@ -65,7 +66,8 @@ export function createRouter(deps: RouterDeps) {
         // Build system context (SOUL + MEMORY + history) and user prompt separately
         const systemPrompt = buildSystemPrompt(workspace, userID, session);
 
-        // Call Claude CLI with session's model preference
+        // Call backend CLI with session's model preference
+        emit("backend", { action: "ask", userID, model: session.model });
         const result = await ask({
           prompt: promptText,
           systemPrompt,
