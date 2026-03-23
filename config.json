@@ -67,7 +67,7 @@
     "max_concurrent_per_agent": 5,
     "max_retries": 3,
     "timeout": "120s",
-    "workspace_root": "./workspace"
+    "workspace_root": ""
   },
   "channels": {
     "dingtalk": {

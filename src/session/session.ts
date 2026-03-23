@@ -43,6 +43,12 @@ export class Session {
   lastActiveAt: number;
   /** The model to use for Claude CLI calls in this session. */
   model: string = DEFAULT_MODEL;
+  /** Stable CLI session ID for --session-id (persists across calls). */
+  cliSessionId: string;
+  /** Override cwd for CLI invocations (set when resuming an external local session). */
+  cliWorkDir?: string;
+  /** Number of times context overflow was detected and session was reset. */
+  contextOverflowCount = 0;
 
   constructor(id: string, agentID: string, userID: string) {
     this.id = id;
@@ -50,6 +56,26 @@ export class Session {
     this.userID = userID;
     this.createdAt = Date.now();
     this.lastActiveAt = Date.now();
+    this.cliSessionId = crypto.randomUUID();
+  }
+
+  /** Reset the CLI session ID (used after context overflow). */
+  resetCliSession(): void {
+    this.cliSessionId = crypto.randomUUID();
+    this.cliWorkDir = undefined;
+    this.contextOverflowCount++;
+  }
+
+  /** Attach to an existing local CLI session from a specific project directory. */
+  attachExternalSession(sessionId: string, workDir: string): void {
+    this.cliSessionId = sessionId;
+    this.cliWorkDir = workDir;
+  }
+
+  /** Detach from external session, returning to normal bot session. */
+  detachExternalSession(): void {
+    this.cliSessionId = crypto.randomUUID();
+    this.cliWorkDir = undefined;
   }
 
   addMessage(role: "user" | "assistant", content: string): void {
@@ -68,5 +94,46 @@ export class Session {
 
   touch(): void {
     this.lastActiveAt = Date.now();
+  }
+
+  /** Serialize session to a plain object for JSON persistence. */
+  toJSON(): Record<string, unknown> {
+    return {
+      id: this.id,
+      agentID: this.agentID,
+      userID: this.userID,
+      model: this.model,
+      cliSessionId: this.cliSessionId,
+      cliWorkDir: this.cliWorkDir,
+      contextOverflowCount: this.contextOverflowCount,
+      conversation: this.conversation,
+      createdAt: this.createdAt,
+      lastActiveAt: this.lastActiveAt,
+    };
+  }
+
+  /** Restore a session from a persisted JSON object. */
+  static fromJSON(data: Record<string, any>): Session {
+    const session = new Session(data.id, data.agentID, data.userID);
+    session.model = data.model ?? DEFAULT_MODEL;
+    session.cliSessionId = data.cliSessionId ?? crypto.randomUUID();
+    session.cliWorkDir = data.cliWorkDir ?? undefined;
+    session.contextOverflowCount = data.contextOverflowCount ?? 0;
+    (session as any).createdAt = data.createdAt ?? Date.now();
+    session.lastActiveAt = data.lastActiveAt ?? Date.now();
+
+    if (Array.isArray(data.conversation)) {
+      for (const msg of data.conversation) {
+        if (msg.role && msg.content) {
+          session.conversation.push({
+            role: msg.role,
+            content: msg.content,
+            timestamp: msg.timestamp ?? Date.now(),
+          });
+        }
+      }
+    }
+
+    return session;
   }
 }

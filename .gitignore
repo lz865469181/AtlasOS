@@ -1,6 +1,7 @@
 *.exe
 bin/
-workspace/
+/workspace/
+.atlasOS/
 .idea/
 .vscode/
 *.swp

@@ -6,9 +6,10 @@ import { buildSystemPrompt } from "../claude/context-builder.js";
 import type { Workspace } from "../workspace/workspace.js";
 import { modelSelectionCard } from "../platform/feishu/cards.js";
 import { spawn } from "node:child_process";
-import { getCliPath, buildSpawnArgs } from "../backend/index.js";
+import { getCliPath, buildSpawnArgs, getStdinPrompt } from "../backend/index.js";
 import { emit } from "../webui/events.js";
 import { spawnDevAgent } from "./dev-agent.js";
+import { findSessionFile, extractSessionMeta, listRecentSessions } from "../claude/sessions.js";
 
 function log(level: string, msg: string, meta?: Record<string, unknown>): void {
   const entry = { time: new Date().toISOString(), level, msg, ...meta };
@@ -43,6 +44,12 @@ const MODEL_ALIASES: Record<string, string> = {
 export async function handleCommand(ctx: CommandContext): Promise<CommandResult> {
   const text = ctx.event.text.trim();
 
+  // /help — show all available commands
+  if (text === "/help") {
+    await handleHelpCommand(ctx);
+    return { handled: true };
+  }
+
   // /model [name] — show card or switch model
   if (text === "/model" || text.startsWith("/model ")) {
     const arg = text.slice("/model".length).trim();
@@ -61,6 +68,25 @@ export async function handleCommand(ctx: CommandContext): Promise<CommandResult>
   if (text.startsWith("/dev")) {
     const content = text.slice("/dev".length).trim();
     await handleDevCommand(ctx, content);
+    return { handled: true };
+  }
+
+  // /sessions — list recent local Claude CLI sessions
+  if (text === "/sessions") {
+    await handleSessionsCommand(ctx);
+    return { handled: true };
+  }
+
+  // /resume <session-id> — attach to a local CLI session
+  if (text === "/resume" || text.startsWith("/resume ")) {
+    const arg = text.slice("/resume".length).trim();
+    await handleResumeCommand(ctx, arg);
+    return { handled: true };
+  }
+
+  // /detach — detach from external session, return to normal
+  if (text === "/detach") {
+    await handleDetachCommand(ctx);
     return { handled: true };
   }
 
@@ -167,12 +193,11 @@ async function handleFeedbackCommand(ctx: CommandContext, feedback: string): Pro
     `User feedback: ${feedback}`,
   ].join("\n");
 
-  const systemPrompt = buildSystemPrompt(workspace, userID, session);
+  const systemPrompt = buildSystemPrompt(workspace, userID);
 
   const args = buildSpawnArgs({
     prompt: analysisPrompt,
     outputFormat: "json",
-    model: "claude-sonnet-4-6",
     systemPrompt: systemPrompt || undefined,
     addDirs: [userDir],
   });
@@ -186,12 +211,16 @@ async function handleFeedbackCommand(ctx: CommandContext, feedback: string): Pro
     windowsHide: true,
   });
 
+  // Write prompt to stdin (avoids command-line length limits on Windows)
+  const stdinPrompt = getStdinPrompt({ prompt: analysisPrompt, systemPrompt: systemPrompt || undefined });
+  child.stdin?.write(stdinPrompt);
+  child.stdin?.end();
+
   let stdout = "";
   let stderr = "";
 
   child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
   child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
-  child.stdin?.end();
 
   child.on("close", async (code) => {
     try {
@@ -250,7 +279,7 @@ async function handleFeedbackCommand(ctx: CommandContext, feedback: string): Pro
  * plans, implements, tests (TDD), and commits code changes.
  */
 async function handleDevCommand(ctx: CommandContext, arg: string): Promise<void> {
-  const { event, sender, workspace } = ctx;
+  const { event, sender, session, workspace } = ctx;
   const { chatID, messageID, userID, chatType } = event;
   const atPrefix = chatType === "group" ? `<at id=${userID}></at>\n` : "";
 
@@ -297,5 +326,172 @@ async function handleDevCommand(ctx: CommandContext, arg: string): Promise<void>
     chatType,
     sender,
     messageID,
+    model: session.model,
   });
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * /sessions — List recent local Claude CLI sessions.
+ */
+async function handleSessionsCommand(ctx: CommandContext): Promise<void> {
+  const { event, sender } = ctx;
+  const { chatID, messageID, chatType, userID } = event;
+  const atPrefix = chatType === "group" ? `<at id=${userID}></at>\n` : "";
+
+  const sessions = listRecentSessions(10);
+
+  if (sessions.length === 0) {
+    await sender.sendText(chatID, "No local Claude CLI sessions found.", messageID);
+    return;
+  }
+
+  const lines = sessions.map((s, i) => {
+    const date = new Date(s.mtime).toLocaleString();
+    const branch = s.gitBranch ? ` (${s.gitBranch})` : "";
+    const shortId = s.sessionId.slice(0, 8) + "...";
+    return `${i + 1}. \`${shortId}\` — ${s.cwd}${branch}\n   ${date}\n   Full ID: \`${s.sessionId}\``;
+  });
+
+  await sender.sendMarkdown(
+    chatID,
+    `${atPrefix}**Recent Local Sessions**\n\n${lines.join("\n\n")}\n\nUse \`/resume <session-id>\` to continue a session.`,
+    messageID,
+  );
+
+  emit("command", { command: "/sessions", userID });
+}
+
+/**
+ * /resume <session-id> — Attach to a local Claude CLI session so subsequent
+ * messages continue that conversation.
+ */
+async function handleResumeCommand(ctx: CommandContext, arg: string): Promise<void> {
+  const { event, sender, session } = ctx;
+  const { chatID, messageID, chatType, userID } = event;
+  const atPrefix = chatType === "group" ? `<at id=${userID}></at>\n` : "";
+
+  let sessionId: string;
+  let jsonlPath: string;
+  let meta: { cwd: string; gitBranch?: string; entrypoint?: string };
+
+  if (!arg) {
+    // No argument: auto-resume the most recent local session
+    const recent = listRecentSessions(1);
+    if (recent.length === 0) {
+      await sender.sendMarkdown(
+        chatID,
+        `${atPrefix}No local Claude CLI sessions found.\n\nStart a conversation with \`claude\` locally first.`,
+        messageID,
+      );
+      return;
+    }
+    const latest = recent[0]!;
+    const found = findSessionFile(latest.sessionId);
+    if (!found) {
+      await sender.sendText(chatID, "Failed to locate latest session file.", messageID);
+      return;
+    }
+    sessionId = latest.sessionId;
+    jsonlPath = found;
+    meta = { cwd: latest.cwd, gitBranch: latest.gitBranch, entrypoint: latest.entrypoint };
+  } else {
+    // Argument provided: resume specific session by ID
+    sessionId = arg.trim();
+
+    if (!UUID_RE.test(sessionId)) {
+      await sender.sendText(chatID, "Invalid session ID format. Expected a UUID.", messageID);
+      return;
+    }
+
+    const found = findSessionFile(sessionId);
+    if (!found) {
+      await sender.sendMarkdown(
+        chatID,
+        `${atPrefix}Session \`${sessionId}\` not found.\n\nUse \`/sessions\` to list available sessions.`,
+        messageID,
+      );
+      return;
+    }
+    jsonlPath = found;
+
+    const extracted = extractSessionMeta(jsonlPath);
+    if (!extracted) {
+      await sender.sendText(chatID, "Failed to read session metadata.", messageID);
+      return;
+    }
+    meta = extracted;
+  }
+
+  session.attachExternalSession(sessionId, meta.cwd);
+
+  const branch = meta.gitBranch ? `\nBranch: \`${meta.gitBranch}\`` : "";
+  await sender.sendMarkdown(
+    chatID,
+    `${atPrefix}**Session Resumed**\n\nSession: \`${sessionId}\`\nProject: \`${meta.cwd}\`${branch}\n\nYour messages will now continue this conversation. Use \`/detach\` to return to normal.`,
+    messageID,
+  );
+
+  log("info", "User resumed external CLI session", { userID, sessionId, cwd: meta.cwd });
+  emit("command", { command: "/resume", userID, sessionId, cwd: meta.cwd });
+}
+
+/**
+ * /detach — Detach from an external CLI session and return to normal bot session.
+ */
+async function handleDetachCommand(ctx: CommandContext): Promise<void> {
+  const { event, sender, session } = ctx;
+  const { chatID, messageID, chatType, userID } = event;
+  const atPrefix = chatType === "group" ? `<at id=${userID}></at>\n` : "";
+
+  if (!session.cliWorkDir) {
+    await sender.sendText(chatID, "Not attached to any external session.", messageID);
+    return;
+  }
+
+  const oldCwd = session.cliWorkDir;
+  session.detachExternalSession();
+
+  await sender.sendMarkdown(
+    chatID,
+    `${atPrefix}**Detached** from external session.\nPrevious project: \`${oldCwd}\`\n\nReturned to normal bot session.`,
+    messageID,
+  );
+
+  log("info", "User detached from external CLI session", { userID, previousCwd: oldCwd });
+  emit("command", { command: "/detach", userID });
+}
+
+/**
+ * /help — Show all available commands.
+ */
+async function handleHelpCommand(ctx: CommandContext): Promise<void> {
+  const { event, sender } = ctx;
+  const { chatID, messageID, chatType, userID } = event;
+  const atPrefix = chatType === "group" ? `<at id=${userID}></at>\n` : "";
+
+  const help = [
+    "**Available Commands**",
+    "",
+    "| Command | Description |",
+    "| --- | --- |",
+    "| `/help` | Show this help message |",
+    "| `/model` | Show model selection card |",
+    "| `/model <name>` | Switch model (haiku / sonnet / opus) |",
+    "| `/dev <task>` | Spawn an autonomous dev agent |",
+    "| `/dev --repo <path> <task>` | Dev agent on a specific repo |",
+    "| `/feedback <content>` | Submit feedback for analysis |",
+    "| `/resume` | Continue your latest local Claude CLI session |",
+    "| `/resume <session-id>` | Continue a specific local session |",
+    "| `/sessions` | List recent local Claude CLI sessions |",
+    "| `/detach` | Detach from external session, return to normal |",
+    "",
+    "**Session Transfer**",
+    "",
+    "Run Claude Code locally (terminal / VS Code), then send `/resume` here to pick up where you left off. The bot automatically finds your latest session and continues the conversation with full context.",
+  ].join("\n");
+
+  await sender.sendMarkdown(chatID, `${atPrefix}${help}`, messageID);
+  emit("command", { command: "/help", userID });
 }

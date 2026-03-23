@@ -2,8 +2,10 @@ import type { MessageEvent, PlatformSender } from "../platform/types.js";
 import type { SessionManager } from "../session/manager.js";
 import type { SessionQueue } from "../session/queue.js";
 import type { Workspace } from "../workspace/workspace.js";
-import { ask } from "../backend/index.js";
-import { buildSystemPrompt } from "../claude/context-builder.js";
+import type { ContextManager } from "../context/manager.js";
+import { ask, askStreaming } from "../backend/index.js";
+import { buildSystemPrompt, buildRecoverySystemPrompt } from "../claude/context-builder.js";
+import { classifyError, ErrorType } from "../error/classifier.js";
 import { emit } from "../webui/events.js";
 import { handleCommand } from "./commands.js";
 import { pickReactionEmoji } from "./sentiment.js";
@@ -17,10 +19,16 @@ export interface RouterDeps {
   sessionManager: SessionManager;
   sessionQueue: SessionQueue;
   workspace: Workspace;
+  contextManager?: ContextManager;
 }
 
+/** Minimum interval between Feishu message updates (ms). */
+const STREAM_THROTTLE_MS = 1500;
+/** Minimum character change before sending an update. */
+const STREAM_MIN_CHARS = 300;
+
 export function createRouter(deps: RouterDeps) {
-  const { sessionManager, sessionQueue, workspace } = deps;
+  const { sessionManager, sessionQueue, workspace, contextManager } = deps;
 
   return async function handle(
     event: MessageEvent,
@@ -50,7 +58,6 @@ export function createRouter(deps: RouterDeps) {
     const cmdResult = await handleCommand({ event, sender, session, workspace });
     if (cmdResult.handled) {
       emit("command", { command: text.split(" ")[0], platform, userID });
-      sender.addReaction(messageID, "THUMBSUP").catch(() => {});
       return;
     }
 
@@ -63,34 +70,72 @@ export function createRouter(deps: RouterDeps) {
         // Record user message
         session.addMessage("user", promptText);
 
-        // Build system context (SOUL + MEMORY + history) and user prompt separately
-        const systemPrompt = buildSystemPrompt(workspace, userID, session);
+        // Summarize context if approaching token limits
+        if (contextManager) {
+          await contextManager.maybeSummarize(session).catch((err) => {
+            log("warn", "Context summarization failed", { error: String(err) });
+          });
+        }
 
-        // Call backend CLI with session's model preference
+        // Build system context (SOUL + MEMORY) — conversation is managed by CLI session
+        const systemPrompt = buildSystemPrompt(workspace, userID);
+
         emit("backend", { action: "ask", userID, model: session.model });
-        const result = await ask({
-          prompt: promptText,
-          systemPrompt,
-          workDir: userDir,
-          addDirs: [userDir],
-          model: session.model,
-        });
 
-        const responseText = result.result || "(no response)";
+        // When attached to an external session, use its original cwd
+        const effectiveWorkDir = session.cliWorkDir ?? userDir;
+        const addDirs = session.cliWorkDir
+          ? [effectiveWorkDir, userDir]
+          : [userDir];
 
-        // Record assistant reply
-        session.addMessage("assistant", responseText);
+        try {
+          const responseText = await handleStreamingResponse({
+            prompt: promptText,
+            systemPrompt,
+            workDir: effectiveWorkDir,
+            addDirs,
+            sessionId: session.cliSessionId,
+            model: session.model,
+            sender,
+            chatID,
+            chatType,
+            userID,
+            messageID,
+          });
 
-        return responseText;
+          session.addMessage("assistant", responseText);
+          return responseText;
+        } catch (err: any) {
+          if (err.contextOverflow) {
+            log("warn", "Context overflow — resetting CLI session", {
+              userID,
+              oldSessionId: session.cliSessionId,
+              overflowCount: session.contextOverflowCount + 1,
+            });
+
+            session.resetCliSession();
+
+            const recentHistory = session.getConversationText(10);
+            const recoveryPrompt = buildRecoverySystemPrompt(workspace, userID, recentHistory);
+
+            emit("backend", { action: "ask-recovery", userID, model: session.model });
+
+            // Recovery uses buffered mode for reliability
+            const result = await ask({
+              prompt: promptText,
+              systemPrompt: recoveryPrompt,
+              workDir: userDir,
+              addDirs: [userDir],
+              sessionId: session.cliSessionId,
+            });
+
+            const responseText = result.result || "(no response)";
+            session.addMessage("assistant", responseText);
+            return responseText;
+          }
+          throw err;
+        }
       });
-
-      // In group chats, prepend @mention to notify the sender
-      const replyContent = chatType === "group"
-        ? `<at id=${userID}></at>\n${reply}`
-        : reply;
-
-      // Send reply
-      await sender.sendMarkdown(chatID, replyContent, messageID);
 
       emit("message", {
         direction: "OUT",
@@ -117,4 +162,84 @@ export function createRouter(deps: RouterDeps) {
       ).catch(() => {});
     }
   };
+}
+
+/**
+ * Handle a streaming response from the backend.
+ * Sends an initial message to Feishu, then updates it as chunks arrive.
+ * Returns the final complete response text.
+ */
+async function handleStreamingResponse(options: {
+  prompt: string;
+  systemPrompt: string;
+  workDir: string;
+  addDirs: string[];
+  sessionId: string;
+  model?: string;
+  sender: PlatformSender;
+  chatID: string;
+  chatType: "p2p" | "group";
+  userID: string;
+  messageID: string;
+}): Promise<string> {
+  const { sender, chatID, chatType, userID, messageID, ...askOptions } = options;
+  const atPrefix = chatType === "group" ? `<at id=${userID}></at>\n` : "";
+
+  let replyMessageID: string | undefined;
+  let lastUpdateTime = 0;
+  let lastUpdateLen = 0;
+  let finalText = "";
+
+  try {
+    for await (const chunk of askStreaming(askOptions)) {
+      if (chunk.type === "assistant_text") {
+        const text = chunk.text;
+        const now = Date.now();
+        const timeSinceUpdate = now - lastUpdateTime;
+        const charsSinceUpdate = text.length - lastUpdateLen;
+
+        // Throttle: update only when enough time AND chars have accumulated
+        if (timeSinceUpdate >= STREAM_THROTTLE_MS && charsSinceUpdate >= STREAM_MIN_CHARS) {
+          const displayText = `${atPrefix}${text}\n\n_...typing_`;
+
+          if (!replyMessageID) {
+            // First chunk: create a new reply message
+            const msgId = await sender.sendMarkdown(chatID, displayText, messageID);
+            replyMessageID = typeof msgId === "string" ? msgId : undefined;
+          } else {
+            // Subsequent chunks: update existing message
+            await sender.updateMarkdown(replyMessageID, displayText);
+          }
+
+          lastUpdateTime = now;
+          lastUpdateLen = text.length;
+        }
+      } else if (chunk.type === "result") {
+        finalText = chunk.text;
+      }
+    }
+  } catch (err) {
+    // If we already sent a partial message, update it with error indicator
+    if (replyMessageID && finalText) {
+      await sender.updateMarkdown(
+        replyMessageID,
+        `${atPrefix}${finalText}\n\n_[Response interrupted]_`,
+      ).catch(() => {});
+    }
+    throw err;
+  }
+
+  if (!finalText) {
+    finalText = "(no response)";
+  }
+
+  // Send or update the final complete message (remove "...typing" indicator)
+  const finalDisplay = `${atPrefix}${finalText}`;
+  if (!replyMessageID) {
+    await sender.sendMarkdown(chatID, finalDisplay, messageID);
+  } else {
+    await sender.updateMarkdown(replyMessageID, finalDisplay);
+  }
+
+  return finalText;
 }

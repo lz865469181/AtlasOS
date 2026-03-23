@@ -1,7 +1,9 @@
+import { join } from "node:path";
 import { loadConfig, parseDuration } from "./config.js";
 import { SessionManager, SessionQueue } from "./session/index.js";
 import { AVAILABLE_MODELS } from "./session/session.js";
-import { Workspace } from "./workspace/workspace.js";
+import { Workspace, getDefaultWorkspaceRoot } from "./workspace/workspace.js";
+import { ContextManager } from "./context/manager.js";
 import { FeishuAdapter } from "./platform/feishu/adapter.js";
 import { registerAdapter, allAdapters } from "./platform/registry.js";
 import { createRouter } from "./router/router.js";
@@ -19,20 +21,28 @@ async function main(): Promise<void> {
   const config = loadConfig();
   log("info", "Configuration loaded");
 
-  // Initialize workspace
+  // Initialize workspace — use platform-aware default when workspace_root is empty
   const agentID = "default";
-  const workspace = new Workspace(config.agent.workspace_root, agentID);
+  const workspaceRoot = config.agent.workspace_root || getDefaultWorkspaceRoot();
+  const workspace = new Workspace(workspaceRoot, agentID);
   workspace.init();
-  log("info", "Workspace initialized", { root: config.agent.workspace_root });
+  log("info", "Workspace initialized", { root: workspaceRoot });
 
-  // Initialize session management
+  // Initialize session management — with disk persistence
   const sessionTtlMs = parseDuration(config.gateway.session_ttl);
-  const sessionManager = new SessionManager(sessionTtlMs);
+  const sessionsPath = join(workspace.agentDir, "sessions.json");
+  const sessionManager = new SessionManager(sessionTtlMs, sessionsPath);
+  sessionManager.loadFromDisk();
   const sessionQueue = new SessionQueue();
-  log("info", "Session manager ready", { ttlMs: sessionTtlMs });
+  log("info", "Session manager ready", { ttlMs: sessionTtlMs, sessions: sessionManager.size });
+
+  // Initialize context manager for conversation summarization
+  const contextManager = new ContextManager({
+    maxTokens: Math.floor((config.gateway.context_compress_threshold ?? 0.8) * 200_000),
+  });
 
   // Create router
-  const router = createRouter({ sessionManager, sessionQueue, workspace });
+  const router = createRouter({ sessionManager, sessionQueue, workspace, contextManager });
 
   // Start WebUI
   let webuiServer: import("node:http").Server | null = null;
