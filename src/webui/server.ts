@@ -4,8 +4,9 @@ import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
-import { readRawConfig, writeRawConfig, getConfigPath } from "../config.js";
+import { readRawConfig, writeRawConfig, getConfigPath, getConfig } from "../config.js";
 import { subscribe, unsubscribe, getHistory } from "./events.js";
+import { allAdapters } from "../platform/registry.js";
 import type { Server } from "node:http";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -162,6 +163,26 @@ export function startWebUI(port: number): Server {
       node_version: process.version,
       current_time: new Date().toISOString(),
     });
+  });
+
+  app.get("/api/channels", (_req, res) => {
+    try {
+      const cfg = getConfig();
+      const registeredAdapters = new Set(allAdapters().map((a) => a.name));
+      const channels = Object.entries(cfg.channels).map(([name, ch]) => ({
+        name,
+        enabled: !!ch.enabled,
+        connected: registeredAdapters.has(name),
+        fields: Object.fromEntries(
+          Object.entries(ch)
+            .filter(([k]) => k !== "enabled")
+            .map(([k, v]) => [k, typeof v === "string" && v.length > 4 ? v.slice(0, 2) + "****" + v.slice(-2) : v]),
+        ),
+      }));
+      res.json(channels);
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
   });
 
   app.get("/api/events", (req, res) => {

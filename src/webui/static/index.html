@@ -153,6 +153,25 @@
   .sse-status.connected { background:rgba(34,197,94,.15); color:var(--success); }
   .sse-status.disconnected { background:rgba(239,68,68,.15); color:var(--danger); }
 
+  /* Channels tab */
+  .ch-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap:16px; }
+  .ch-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:20px; position:relative; }
+  .ch-card-header { display:flex; align-items:center; gap:10px; margin-bottom:14px; }
+  .ch-card-icon { font-size:24px; }
+  .ch-card-name { font-size:16px; font-weight:600; flex:1; text-transform:capitalize; }
+  .ch-badge { font-size:11px; padding:3px 10px; border-radius:12px; font-weight:600; }
+  .ch-badge.enabled { background:rgba(34,197,94,.15); color:var(--success); }
+  .ch-badge.disabled { background:rgba(239,68,68,.12); color:var(--danger); }
+  .ch-conn { font-size:12px; display:flex; align-items:center; gap:6px; margin-bottom:12px; }
+  .ch-conn .dot { width:7px; height:7px; border-radius:50%; display:inline-block; }
+  .ch-conn .dot.on { background:var(--success); }
+  .ch-conn .dot.off { background:var(--text2); }
+  .ch-fields { font-size:13px; font-family:'Cascadia Code','Fira Code',monospace; }
+  .ch-field { display:flex; gap:8px; padding:4px 0; border-top:1px solid var(--border); }
+  .ch-field:first-child { border-top:none; }
+  .ch-field-key { color:var(--text2); min-width:120px; }
+  .ch-field-val { color:var(--text); word-break:break-all; }
+
   @media(max-width:600px) {
     .secret-row { flex-wrap:wrap; }
     .set-secret-form { flex-wrap:wrap; }
@@ -173,12 +192,29 @@
 
 <div class="tabs">
   <div class="tab active" data-panel="monitor">Monitor</div>
+  <div class="tab" data-panel="channels">Channels</div>
   <div class="tab" data-panel="config">Configuration</div>
   <div class="tab" data-panel="secrets">Secrets</div>
   <div class="tab" data-panel="status">Status</div>
 </div>
 
 <div class="content">
+  <!-- Channels Panel -->
+  <div class="panel" id="panel-channels">
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+        <h2 style="margin-bottom:0;">Channels</h2>
+        <button class="btn btn-sm" style="background:var(--surface2);color:var(--text2);" onclick="loadChannels();">Refresh</button>
+      </div>
+      <p style="color:var(--text2);font-size:13px;margin-bottom:16px;">
+        Configured messaging platform channels. Secret values are masked. Edit via the Configuration tab.
+      </p>
+      <div class="ch-grid" id="channelsGrid">
+        <div style="color:var(--text2);padding:20px;text-align:center;">Loading channels...</div>
+      </div>
+    </div>
+  </div>
+
   <!-- Config Panel -->
   <div class="panel" id="panel-config">
     <div class="card">
@@ -283,6 +319,7 @@ const SECTION_ICONS = {
   feishu:'&#x1f426;', telegram:'&#x2708;', discord:'&#x1f3ae;', dingtalk:'&#x1f514;',
   bash:'&#x1f4bb;', compaction:'&#x1f5dc;'
 };
+const CHANNEL_ICONS = { feishu:'&#x1f426;', telegram:'&#x2708;&#xFE0F;', discord:'&#x1f3ae;', dingtalk:'&#x1f514;' };
 const SECRET_FIELDS = ['secret','token','password','api_key','apikey','app_key'];
 
 function isSecretKey(key) {
@@ -592,6 +629,39 @@ async function removeSecret(key) {
   } catch(e) { showToast('Failed: ' + e.message, 'error'); }
 }
 
+// --- Channels ---
+async function loadChannels() {
+  try {
+    const r = await fetch('/api/channels');
+    if (!r.ok) throw new Error(r.statusText);
+    const channels = await r.json();
+    const grid = document.getElementById('channelsGrid');
+    if (!channels.length) {
+      grid.innerHTML = '<div style="color:var(--text2);padding:20px;text-align:center;">No channels configured.</div>';
+      return;
+    }
+    grid.innerHTML = channels.map(ch => {
+      const icon = CHANNEL_ICONS[ch.name] || '&#x1f4e1;';
+      const badgeClass = ch.enabled ? 'enabled' : 'disabled';
+      const badgeText = ch.enabled ? 'Enabled' : 'Disabled';
+      const connDot = ch.connected ? 'on' : 'off';
+      const connText = ch.connected ? 'Adapter connected' : 'Not connected';
+      const fields = Object.entries(ch.fields || {}).map(([k, v]) =>
+        '<div class="ch-field"><span class="ch-field-key">' + esc(k) + '</span><span class="ch-field-val">' + esc(String(v)) + '</span></div>'
+      ).join('');
+      return '<div class="ch-card">' +
+        '<div class="ch-card-header">' +
+          '<span class="ch-card-icon">' + icon + '</span>' +
+          '<span class="ch-card-name">' + esc(ch.name) + '</span>' +
+          '<span class="ch-badge ' + badgeClass + '">' + badgeText + '</span>' +
+        '</div>' +
+        '<div class="ch-conn"><span class="dot ' + connDot + '"></span><span>' + connText + '</span></div>' +
+        (fields ? '<div class="ch-fields">' + fields + '</div>' : '') +
+      '</div>';
+    }).join('');
+  } catch(e) { showToast('Failed to load channels: ' + e.message, 'error'); }
+}
+
 // --- Status ---
 async function loadStatus() {
   try {
@@ -752,6 +822,7 @@ async function restartServer() {
 
 // --- Init ---
 loadConfig();
+loadChannels();
 loadSecrets();
 loadStatus();
 setInterval(loadStatus, 15000);
