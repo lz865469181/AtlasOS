@@ -87,7 +87,7 @@ async function main(): Promise<void> {
   // Start WebUI
   let webuiServer: import("node:http").Server | null = null;
   if (config.webui.enabled) {
-    webuiServer = startWebUI(config.webui.port);
+    webuiServer = startWebUI(config.webui.port, { sessionManager, workspace });
   }
 
   // Start platform adapters

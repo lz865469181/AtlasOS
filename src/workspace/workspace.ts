@@ -81,6 +81,11 @@ export class Workspace {
     return join(this.userDir(userID), "uploads");
   }
 
+  /** Per-user inbox file for CLI polling (Feishu → CLI bridge). */
+  inboxPath(userID: string): string {
+    return join(this.userDir(userID), "inbox.jsonl");
+  }
+
   /** Initialize agent workspace directories and default files. */
   init(soulContent?: string, agentsContent?: string): void {
     const dirs = [

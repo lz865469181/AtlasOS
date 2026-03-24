@@ -63,6 +63,7 @@
       "json"
     ],
     "claude_cli_path": "claude",
+    "default_model": "",
     "opencode_cli_path": "opencode",
     "max_concurrent_per_agent": 5,
     "max_retries": 3,
@@ -106,6 +107,9 @@
     "format": "json",
     "level": "info",
     "output": "stdout"
+  },
+  "mcp": {
+    "config_path": "./mcp-config.json"
   },
   "memory": {
     "compaction": {

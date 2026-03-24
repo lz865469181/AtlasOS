@@ -15,5 +15,5 @@
     "sourceMap": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "go-archive", "workspace"]
+  "exclude": ["node_modules", "dist", "go-archive", "workspace", "src/**/*.test.ts"]
 }

@@ -4,6 +4,8 @@ import type { SessionQueue } from "../session/queue.js";
 import type { Workspace } from "../workspace/workspace.js";
 import type { ContextManager } from "../context/manager.js";
 import type { MemoryExtractor } from "../memory/extractor.js";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { dirname } from "node:path";
 import { ask, askStreaming } from "../backend/index.js";
 import { buildSystemPrompt, buildRecoverySystemPrompt } from "../claude/context-builder.js";
 import { classifyError, ErrorType } from "../error/classifier.js";
@@ -56,6 +58,9 @@ export function createRouter(deps: RouterDeps) {
 
     const session = sessionManager.getOrCreate(workspace.agentID, userID);
 
+    // Track the most recent chat ID so the /api/reuse endpoint can send messages
+    session.lastChatID = chatID;
+
     // Resolve workspace for the session's current agent (may differ from default after /switch-agent)
     const effectiveWorkspace = session.agentID !== workspace.agentID
       ? workspace.forAgent(session.agentID)
@@ -65,10 +70,39 @@ export function createRouter(deps: RouterDeps) {
     const userDir = effectiveWorkspace.initUser(userID);
 
     // Check for slash commands (/feedback, /model, etc.)
-    const cmdResult = await handleCommand({ event, sender, session, workspace });
+    const cmdResult = await handleCommand({ event, sender, session, workspace: effectiveWorkspace });
     if (cmdResult.handled) {
       emit("command", { command: text.split(" ")[0], platform, userID });
       return;
+    }
+
+    // Write non-command Feishu messages to inbox so the CLI can poll for replies.
+    // Placed after command handling so slash commands (/detach, /help, etc.) are excluded.
+    if (session.cliWorkDir) {
+      try {
+        const inboxFile = effectiveWorkspace.inboxPath(userID);
+        mkdirSync(dirname(inboxFile), { recursive: true });
+        const entry = JSON.stringify({
+          id: `msg-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`,
+          ts: Date.now(),
+          from: "feishu",
+          text,
+          chatID,
+          messageID,
+        });
+        appendFileSync(inboxFile, entry + "\n", "utf-8");
+
+        // Cap inbox at 1000 lines to prevent unbounded growth
+        const MAX_INBOX_LINES = 1000;
+        if (existsSync(inboxFile)) {
+          const lines = readFileSync(inboxFile, "utf-8").split("\n").filter(Boolean);
+          if (lines.length > MAX_INBOX_LINES) {
+            writeFileSync(inboxFile, lines.slice(-MAX_INBOX_LINES).join("\n") + "\n", "utf-8");
+          }
+        }
+      } catch (err) {
+        log("warn", "Failed to write to inbox", { userID, error: String(err) });
+      }
     }
 
     // If command returned rewritten text (e.g. /dev, /feedback prefix stripped),

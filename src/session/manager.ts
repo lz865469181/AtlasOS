@@ -54,6 +54,25 @@ export class SessionManager {
     return this.sessions.size;
   }
 
+  /** Find the most recently active user ID across all sessions. */
+  findMostRecentUserID(): string | undefined {
+    let latestTime = 0;
+    let latestUserID: string | undefined;
+    for (const session of this.sessions.values()) {
+      if (session.lastActiveAt > latestTime && session.userID !== "unknown") {
+        latestTime = session.lastActiveAt;
+        latestUserID = session.userID;
+      }
+    }
+    return latestUserID;
+  }
+
+  /** Find the last chat ID used by a specific user. */
+  findLastChatID(agentID: string, userID: string): string | undefined {
+    const session = this.get(agentID, userID);
+    return session?.lastChatID;
+  }
+
   private cleanup(): void {
     const now = Date.now();
     for (const [key, session] of this.sessions) {

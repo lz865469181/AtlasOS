@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "fetch": {
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-fetch@latest"],
+      "description": "Fetch web pages and convert to markdown for analysis"
+    },
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-memory@latest"],
+      "description": "Persistent key-value memory store across sessions"
+    }
+  }
+}

@@ -47,6 +47,8 @@ export class Session {
   cliSessionId: string;
   /** Override cwd for CLI invocations (set when resuming an external local session). */
   cliWorkDir?: string;
+  /** Last chat ID used by this session (for API-initiated message sending). */
+  lastChatID?: string;
   /** Number of times context overflow was detected and session was reset. */
   contextOverflowCount = 0;
 
@@ -112,6 +114,7 @@ export class Session {
       model: this.model,
       cliSessionId: this.cliSessionId,
       cliWorkDir: this.cliWorkDir,
+      lastChatID: this.lastChatID,
       contextOverflowCount: this.contextOverflowCount,
       conversation: this.conversation,
       createdAt: this.createdAt,
@@ -125,6 +128,7 @@ export class Session {
     session.model = data.model ?? DEFAULT_MODEL;
     session.cliSessionId = data.cliSessionId ?? crypto.randomUUID();
     session.cliWorkDir = data.cliWorkDir ?? undefined;
+    session.lastChatID = data.lastChatID ?? undefined;
     session.contextOverflowCount = data.contextOverflowCount ?? 0;
     Object.defineProperty(session, "createdAt", { value: data.createdAt ?? Date.now() });
     session.lastActiveAt = data.lastActiveAt ?? Date.now();

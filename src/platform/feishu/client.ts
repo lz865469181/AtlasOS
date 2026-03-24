@@ -48,7 +48,7 @@ export class FeishuClient implements PlatformSender {
     chatID: string,
     markdown: string,
     replyMessageID?: string,
-  ): Promise<void> {
+  ): Promise<string | void> {
     // Feishu uses interactive cards for markdown content
     const card = {
       config: { wide_screen_mode: true },
@@ -60,15 +60,17 @@ export class FeishuClient implements PlatformSender {
 
     try {
       if (replyMessageID) {
-        await this.client.im.message.reply({
+        const resp = await this.client.im.message.reply({
           path: { message_id: replyMessageID },
           data: { content, msg_type: "interactive" },
         });
+        return (resp as any)?.data?.message_id ?? undefined;
       } else {
-        await this.client.im.message.create({
+        const resp = await this.client.im.message.create({
           params: { receive_id_type: "chat_id" },
           data: { receive_id: chatID, msg_type: "interactive", content },
         });
+        return (resp as any)?.data?.message_id ?? undefined;
       }
     } catch (err) {
       log("error", "Failed to send markdown card", { chatID, error: String(err) });
@@ -96,6 +98,25 @@ export class FeishuClient implements PlatformSender {
     } catch (err) {
       log("error", "Failed to send interactive card", { chatID, error: String(err) });
       throw err;
+    }
+  }
+
+  async updateMarkdown(messageID: string, markdown: string): Promise<void> {
+    const card = {
+      config: { wide_screen_mode: true },
+      elements: [
+        { tag: "markdown" as const, content: markdown },
+      ],
+    };
+    const content = JSON.stringify(card);
+
+    try {
+      await this.client.im.message.patch({
+        path: { message_id: messageID },
+        data: { content },
+      });
+    } catch (err) {
+      log("warn", "Failed to update markdown card", { messageID, error: String(err) });
     }
   }
 

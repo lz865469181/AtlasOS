@@ -20,6 +20,8 @@ export interface AgentConfig {
   max_retries: number;
   max_concurrent_per_agent: number;
   workspace_root: string;
+  /** Default model ID. Empty string or omitted = let CLI decide. */
+  default_model?: string;
   bash: {
     allowed_commands: string[];
     blocked_commands: string[];
@@ -84,6 +86,10 @@ export interface WebUIConfig {
   port: number;
 }
 
+export interface McpConfig {
+  config_path: string;
+}
+
 export interface AppConfig {
   agent: AgentConfig;
   channels: ChannelsConfig;
@@ -91,6 +97,7 @@ export interface AppConfig {
   health: HealthConfig;
   logging: LoggingConfig;
   memory: MemoryConfig;
+  mcp?: McpConfig;
   webui: WebUIConfig;
 }
 

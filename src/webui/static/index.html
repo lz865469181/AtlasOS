@@ -195,6 +195,7 @@
   <div class="tab" data-panel="channels">Channels</div>
   <div class="tab" data-panel="config">Configuration</div>
   <div class="tab" data-panel="secrets">Secrets</div>
+  <div class="tab" data-panel="tools">Tools</div>
   <div class="tab" data-panel="status">Status</div>
 </div>
 
@@ -293,6 +294,41 @@
         <div class="msg-list" id="msgList">
           <div class="msg-empty" id="msgEmpty">No messages yet. Waiting for @bot mentions...</div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tools Panel -->
+  <div class="panel" id="panel-tools">
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+        <h2 style="margin-bottom:0;">Search Tool Providers</h2>
+        <button class="btn btn-sm" style="background:var(--surface2);color:var(--text2);" onclick="loadToolsStatus();">Refresh</button>
+      </div>
+      <p style="color:var(--text2);font-size:13px;margin-bottom:16px;">
+        Configure API keys for external search and fetch services. At least one search provider is needed for web search capabilities.
+      </p>
+      <div id="toolsStatusGrid" class="ch-grid"></div>
+    </div>
+    <div class="card">
+      <h2>API Keys</h2>
+      <p style="color:var(--text2);font-size:13px;margin-bottom:16px;">
+        Set API keys for tool providers. Keys are stored in process memory (restart-safe via .env file).
+      </p>
+      <div id="toolKeysList"></div>
+    </div>
+    <div class="card">
+      <h2>Set Tool API Key</h2>
+      <div class="set-secret-form">
+        <div class="form-group">
+          <label>Provider</label>
+          <select id="toolKeySelect"></select>
+        </div>
+        <div class="form-group">
+          <label>API Key Value</label>
+          <input id="toolKeyValue" type="password" placeholder="Enter API key" />
+        </div>
+        <button class="btn btn-primary" onclick="setToolKey()">Set Key</button>
       </div>
     </div>
   </div>
@@ -820,10 +856,83 @@ async function restartServer() {
   } catch(e) { showToast('Restart failed: ' + e.message, 'error'); }
 }
 
+// --- Tools ---
+async function loadToolsStatus() {
+  try {
+    const [statusRes, keysRes] = await Promise.all([
+      fetch('/api/tools/status', { headers: { 'X-CSRF-Token': csrfToken } }),
+      fetch('/api/tools/keys', { headers: { 'X-CSRF-Token': csrfToken } })
+    ]);
+    const status = await statusRes.json();
+    const keys = await keysRes.json();
+
+    // Render status grid
+    const grid = document.getElementById('toolsStatusGrid');
+    grid.innerHTML = status.map(s => `
+      <div class="ch-card">
+        <div class="ch-header">
+          <span class="ch-name">${s.provider}</span>
+          <span class="ch-status ${s.available ? 'connected' : 'disconnected'}">${s.available ? 'Available' : 'No Key'}</span>
+        </div>
+        <div class="ch-fields">
+          <div class="ch-field"><span class="ch-fk">Type</span><span class="ch-fv">${s.type}</span></div>
+        </div>
+      </div>
+    `).join('');
+
+    // Render keys list
+    const list = document.getElementById('toolKeysList');
+    list.innerHTML = keys.map(k => `
+      <div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border);">
+        <span style="font-family:monospace;font-size:13px;min-width:200px;color:var(--text2);">${k.env_var}</span>
+        <span style="font-size:13px;color:${k.is_set ? 'var(--success)' : 'var(--text2)'};">${k.is_set ? k.masked : 'Not set'}</span>
+        ${k.is_set ? `<button class="btn btn-sm" style="background:var(--danger);color:white;margin-left:auto;" onclick="removeToolKey('${k.env_var}')">Remove</button>` : ''}
+      </div>
+    `).join('');
+
+    // Populate select dropdown
+    const sel = document.getElementById('toolKeySelect');
+    sel.innerHTML = keys.map(k => `<option value="${k.env_var}">${k.env_var}${k.is_set ? ' (set)' : ''}</option>`).join('');
+  } catch(e) { showToast('Failed to load tools: ' + e.message, 'error'); }
+}
+
+async function setToolKey() {
+  const env_var = document.getElementById('toolKeySelect').value;
+  const value = document.getElementById('toolKeyValue').value.trim();
+  if (!value) { showToast('Enter an API key value', 'error'); return; }
+  try {
+    const res = await fetch('/api/tools/keys', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+      body: JSON.stringify({ env_var, value })
+    });
+    const d = await res.json();
+    if (d.ok) {
+      showToast('API key set: ' + env_var);
+      document.getElementById('toolKeyValue').value = '';
+      loadToolsStatus();
+    } else { showToast(d.error, 'error'); }
+  } catch(e) { showToast('Failed: ' + e.message, 'error'); }
+}
+
+async function removeToolKey(env_var) {
+  try {
+    const res = await fetch('/api/tools/keys', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+      body: JSON.stringify({ env_var })
+    });
+    const d = await res.json();
+    if (d.ok) { showToast('API key removed: ' + env_var); loadToolsStatus(); }
+    else { showToast(d.error, 'error'); }
+  } catch(e) { showToast('Failed: ' + e.message, 'error'); }
+}
+
 // --- Init ---
 loadConfig();
 loadChannels();
 loadSecrets();
+loadToolsStatus();
 loadStatus();
 setInterval(loadStatus, 15000);
 connectSSE();

@@ -1,14 +1,17 @@
 import express from "express";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { readRawConfig, writeRawConfig, getConfigPath, getConfig } from "../config.js";
-import { subscribe, unsubscribe, getHistory } from "./events.js";
-import { allAdapters } from "../platform/registry.js";
+import { subscribe, unsubscribe, getHistory, emit } from "./events.js";
+import { allAdapters, getAdapter } from "../platform/registry.js";
 import { TOOL_API_KEY_ENV } from "../tools/index.js";
 import { SearchService } from "../tools/index.js";
+import { listRecentSessions, findSessionFile, extractSessionMeta } from "../claude/sessions.js";
+import type { SessionManager } from "../session/manager.js";
+import type { Workspace } from "../workspace/workspace.js";
 import type { Server } from "node:http";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -49,13 +52,17 @@ function csrfMiddleware(
     res.cookie("csrf_token", token, { httpOnly: false, sameSite: "strict" });
   }
 
-  // Verify on mutating methods
+  // Verify on mutating methods (exempt /api/reuse for programmatic CLI access)
   if (["POST", "PUT", "DELETE"].includes(req.method)) {
-    const cookie = req.cookies?.csrf_token;
-    const header = req.headers["x-csrf-token"];
-    if (!cookie || cookie !== header) {
-      res.status(403).json({ error: "CSRF token mismatch" });
-      return;
+    const isReuseEndpoint = req.path === "/api/reuse"
+      || (req.method === "DELETE" && req.path === "/api/reuse/inbox");
+    if (!isReuseEndpoint) {
+      const cookie = req.cookies?.csrf_token;
+      const header = req.headers["x-csrf-token"];
+      if (!cookie || cookie !== header) {
+        res.status(403).json({ error: "CSRF token mismatch" });
+        return;
+      }
     }
   }
 
@@ -87,7 +94,12 @@ function maskValue(val: string): string {
 
 // --- Server ---
 
-export function startWebUI(port: number): Server {
+export interface WebUIDeps {
+  sessionManager?: SessionManager;
+  workspace?: Workspace;
+}
+
+export function startWebUI(port: number, deps?: WebUIDeps): Server {
   const app = express();
 
   // Parse JSON & cookies
@@ -289,6 +301,240 @@ export function startWebUI(port: number): Server {
   app.get("/api/tools/status", (_req, res) => {
     const service = new SearchService();
     res.json(service.getProviderStatus());
+  });
+
+  // --- /api/reuse: CLI-to-Feishu session bridging ---
+  // Allows a local CLI session to push its current output to Feishu and
+  // attach the Feishu bot to the same CLI session for continued conversation.
+  //
+  // POST /api/reuse
+  // Body: {
+  //   sessionId?: string,   // CLI session UUID (auto-detects latest if omitted)
+  //   message?: string,     // Message to send to Feishu (e.g. current CLI output)
+  //   userID?: string,      // Feishu open_id (uses first active session user if omitted)
+  //   chatID?: string,      // Feishu chat_id (uses user's last active chat if omitted)
+  // }
+  app.post("/api/reuse", async (req, res) => {
+    try {
+      const { sessionId, message, userID, chatID } = req.body ?? {};
+      const sessionManager = deps?.sessionManager;
+      const workspace = deps?.workspace;
+
+      if (!sessionManager || !workspace) {
+        res.status(503).json({ error: "Session manager not available" });
+        return;
+      }
+
+      // 1. Resolve the CLI session to attach
+      const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      let resolvedSessionId: string;
+      let meta: { cwd: string; gitBranch?: string; entrypoint?: string };
+
+      if (sessionId) {
+        if (!UUID_RE.test(sessionId)) {
+          res.status(400).json({ error: "Invalid session ID format. Expected a UUID." });
+          return;
+        }
+        const found = findSessionFile(sessionId);
+        if (!found) {
+          res.status(404).json({ error: `Session ${sessionId} not found` });
+          return;
+        }
+        resolvedSessionId = sessionId;
+        const extracted = extractSessionMeta(found);
+        if (!extracted) {
+          res.status(400).json({ error: "Failed to read session metadata" });
+          return;
+        }
+        meta = extracted;
+      } else {
+        // Auto-detect latest CLI session
+        const recent = listRecentSessions(1);
+        if (recent.length === 0) {
+          res.status(404).json({ error: "No local CLI sessions found" });
+          return;
+        }
+        const latest = recent[0]!;
+        resolvedSessionId = latest.sessionId;
+        meta = { cwd: latest.cwd, gitBranch: latest.gitBranch, entrypoint: latest.entrypoint };
+      }
+
+      // 2. Get the Feishu adapter and sender
+      const feishuAdapter = getAdapter("feishu");
+      if (!feishuAdapter) {
+        res.status(503).json({ error: "Feishu adapter not available" });
+        return;
+      }
+      const sender = feishuAdapter.getSender();
+
+      // 3. Find or create the target session
+      const agentID = workspace.agentID;
+      let resolvedUserID = userID;
+      let resolvedChatID = chatID;
+
+      // If no userID specified, try to find the most recently active feishu session
+      if (!resolvedUserID) {
+        resolvedUserID = sessionManager.findMostRecentUserID();
+      }
+
+      if (!resolvedUserID) {
+        res.status(400).json({ error: "No userID provided and no active Feishu sessions found. Please specify userID." });
+        return;
+      }
+
+      // Resolve chatID: prefer explicit > session's lastChatID > error
+      if (!resolvedChatID) {
+        resolvedChatID = sessionManager.findLastChatID(agentID, resolvedUserID);
+      }
+      if (!resolvedChatID) {
+        res.status(400).json({
+          error: "No chatID provided and no recent chat found for this user. "
+            + "The user must send at least one message to the bot first, or provide chatID explicitly.",
+        });
+        return;
+      }
+
+      // Attach the CLI session to the feishu bot session
+      const session = sessionManager.getOrCreate(agentID, resolvedUserID);
+      session.attachExternalSession(resolvedSessionId, meta.cwd);
+      sessionManager.scheduleSave();
+
+      log("info", "CLI session reused via API", {
+        sessionId: resolvedSessionId,
+        userID: resolvedUserID,
+        chatID: resolvedChatID,
+        cwd: meta.cwd,
+      });
+      emit("command", { command: "/reuse", source: "api", userID: resolvedUserID, sessionId: resolvedSessionId });
+
+      // 4. Send notification + message to Feishu
+      const branch = meta.gitBranch ? `\nBranch: \`${meta.gitBranch}\`` : "";
+      const attachInfo = [
+        `**Session Reused (from CLI)**`,
+        ``,
+        `Session: \`${resolvedSessionId}\``,
+        `Project: \`${meta.cwd}\`${branch}`,
+        ``,
+        `Your Feishu chat is now attached to this CLI session. Send messages here to continue the conversation.`,
+        `Use \`/detach\` to return to normal.`,
+      ].join("\n");
+
+      await sender.sendMarkdown(resolvedChatID, attachInfo);
+
+      // Send the CLI output as a message if provided (truncate to 30KB)
+      if (message && typeof message === "string" && message.trim()) {
+        const MAX_MSG_LEN = 30_000;
+        const truncated = message.trim().slice(0, MAX_MSG_LEN);
+        const suffix = message.trim().length > MAX_MSG_LEN ? "\n\n_...truncated_" : "";
+        await sender.sendMarkdown(resolvedChatID, `**CLI Output:**\n\n${truncated}${suffix}`);
+      }
+
+      res.json({
+        ok: true,
+        sessionId: resolvedSessionId,
+        userID: resolvedUserID,
+        chatID: resolvedChatID,
+        cwd: meta.cwd,
+        gitBranch: meta.gitBranch,
+        inboxUrl: `/api/reuse/inbox?userID=${encodeURIComponent(resolvedUserID)}`,
+      });
+    } catch (err) {
+      log("error", "Reuse API error", { error: String(err) });
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // GET /api/reuse/status — Check current reuse state for a user
+  app.get("/api/reuse/status", (req, res) => {
+    const sessionManager = deps?.sessionManager;
+    const workspace = deps?.workspace;
+    if (!sessionManager || !workspace) {
+      res.status(503).json({ error: "Session manager not available" });
+      return;
+    }
+
+    const userID = req.query.userID as string;
+    if (!userID) {
+      res.status(400).json({ error: "userID query param required" });
+      return;
+    }
+
+    const session = sessionManager.get(workspace.agentID, userID);
+    if (!session) {
+      res.json({ attached: false, message: "No active session for this user" });
+      return;
+    }
+
+    res.json({
+      attached: !!session.cliWorkDir,
+      sessionId: session.cliSessionId,
+      cliWorkDir: session.cliWorkDir ?? null,
+    });
+  });
+
+  // GET /api/reuse/inbox — Poll for Feishu replies written to the inbox file
+  app.get("/api/reuse/inbox", (req, res) => {
+    const workspace = deps?.workspace;
+    if (!workspace) {
+      res.status(503).json({ error: "Workspace not available" });
+      return;
+    }
+
+    const userID = req.query.userID as string;
+    if (!userID) {
+      res.status(400).json({ error: "userID query param required" });
+      return;
+    }
+
+    const since = Number(req.query.since) || 0;
+    const inboxFile = workspace.inboxPath(userID);
+
+    if (!existsSync(inboxFile)) {
+      res.json({ messages: [], lastTs: since });
+      return;
+    }
+
+    try {
+      const lines = readFileSync(inboxFile, "utf-8").split("\n").filter(Boolean);
+      const messages: Array<Record<string, unknown>> = [];
+      let lastTs = since;
+
+      for (const line of lines) {
+        try {
+          const msg = JSON.parse(line);
+          if (msg.ts > since) {
+            messages.push(msg);
+            if (msg.ts > lastTs) lastTs = msg.ts;
+          }
+        } catch { /* skip malformed lines */ }
+      }
+
+      res.json({ messages, lastTs });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // DELETE /api/reuse/inbox — Clear the inbox file (called on detach or manual cleanup)
+  app.delete("/api/reuse/inbox", (req, res) => {
+    const workspace = deps?.workspace;
+    if (!workspace) {
+      res.status(503).json({ error: "Workspace not available" });
+      return;
+    }
+
+    const userID = req.query.userID as string;
+    if (!userID) {
+      res.status(400).json({ error: "userID query param required" });
+      return;
+    }
+
+    const inboxFile = workspace.inboxPath(userID);
+    if (existsSync(inboxFile)) {
+      writeFileSync(inboxFile, "", "utf-8");
+    }
+
+    res.json({ ok: true });
   });
 
   const server = app.listen(port, "127.0.0.1", () => {

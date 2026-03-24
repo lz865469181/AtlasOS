@@ -7,6 +7,7 @@ import type { Workspace } from "../workspace/workspace.js";
 import { modelSelectionCard } from "../platform/feishu/cards.js";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
+import { existsSync, writeFileSync } from "node:fs";
 import { getCliPath, buildSpawnArgs, getStdinPrompt } from "../backend/index.js";
 import { emit } from "../webui/events.js";
 import { spawnDevAgent } from "./dev-agent.js";
@@ -92,6 +93,12 @@ export async function handleCommand(ctx: CommandContext): Promise<CommandResult>
     const arg = text.slice("/resume".length).trim();
     await handleResumeCommand(ctx, arg);
     return { handled: true };
+  }
+
+  // /reuse [message] — attach to latest CLI session and send its output to Feishu
+  if (text === "/reuse" || text.startsWith("/reuse ")) {
+    const arg = text.slice("/reuse".length).trim();
+    return await handleReuseCommand(ctx, arg);
   }
 
   // /detach — detach from external session, return to normal
@@ -548,10 +555,64 @@ async function handleResumeCommand(ctx: CommandContext, arg: string): Promise<vo
 }
 
 /**
- * /detach — Detach from an external CLI session and return to normal bot session.
+ * /reuse [message] — Attach to the latest local CLI session and optionally
+ * forward a message. This is the Feishu-side entry point for the CLI<->Feishu
+ * bridge. Once attached, all subsequent messages continue in the CLI session.
+ *
+ * From CLI side, the same flow is triggered via POST /api/reuse on the WebUI.
+ * From Feishu side, the user simply sends /reuse here.
+ *
+ * Difference from /resume: /reuse is designed for quick hand-off from CLI to
+ * Feishu. It always picks the latest session. If a message is provided after
+ * /reuse, it is forwarded to Claude in the attached session context immediately.
  */
-async function handleDetachCommand(ctx: CommandContext): Promise<void> {
+async function handleReuseCommand(ctx: CommandContext, arg: string): Promise<CommandResult> {
   const { event, sender, session } = ctx;
+  const { chatID, messageID, chatType, userID } = event;
+  const atPrefix = chatType === "group" ? `<at id=${userID}></at>\n` : "";
+
+  // Always use the most recent local session
+  const recent = listRecentSessions(1);
+  if (recent.length === 0) {
+    await sender.sendMarkdown(
+      chatID,
+      `${atPrefix}No local Claude CLI sessions found.\n\nStart a conversation with \`claude\` locally first, then come back here and send \`/reuse\`.`,
+      messageID,
+    );
+    return { handled: true };
+  }
+
+  const latest = recent[0]!;
+  const found = findSessionFile(latest.sessionId);
+  if (!found) {
+    await sender.sendText(chatID, "Failed to locate latest session file.", messageID);
+    return { handled: true };
+  }
+
+  session.attachExternalSession(latest.sessionId, latest.cwd);
+
+  const branch = latest.gitBranch ? `\nBranch: \`${latest.gitBranch}\`` : "";
+  await sender.sendMarkdown(
+    chatID,
+    `${atPrefix}**Session Reused**\n\nSession: \`${latest.sessionId}\`\nProject: \`${latest.cwd}\`${branch}\n\nYour messages will now continue this CLI conversation.\nUse \`/detach\` to return to normal.`,
+    messageID,
+  );
+
+  log("info", "User reused CLI session via /reuse", { userID, sessionId: latest.sessionId, cwd: latest.cwd });
+  emit("command", { command: "/reuse", userID, sessionId: latest.sessionId, cwd: latest.cwd });
+
+  // If the user provided extra text after /reuse, pass it through to the router
+  // as a normal message so it gets processed in the attached session context.
+  if (arg.trim()) {
+    return { handled: false, rewrittenText: arg.trim() };
+  }
+
+  return { handled: true };
+}
+
+
+async function handleDetachCommand(ctx: CommandContext): Promise<void> {
+  const { event, sender, session, workspace } = ctx;
   const { chatID, messageID, chatType, userID } = event;
   const atPrefix = chatType === "group" ? `<at id=${userID}></at>\n` : "";
 
@@ -561,6 +622,15 @@ async function handleDetachCommand(ctx: CommandContext): Promise<void> {
   }
 
   const oldCwd = session.cliWorkDir;
+
+  // Clear the inbox file before detaching
+  try {
+    const inboxFile = workspace.inboxPath(userID);
+    if (existsSync(inboxFile)) {
+      writeFileSync(inboxFile, "", "utf-8");
+    }
+  } catch { /* best-effort cleanup */ }
+
   session.detachExternalSession();
 
   await sender.sendMarkdown(
@@ -742,6 +812,8 @@ async function handleHelpCommand(ctx: CommandContext): Promise<void> {
     "| `/feedback <content>` | Submit feedback for analysis |",
     "| `/resume` | Continue your latest local Claude CLI session |",
     "| `/resume <session-id>` | Continue a specific local session |",
+    "| `/reuse` | Quick-attach to latest CLI session (simpler /resume) |",
+    "| `/reuse <message>` | Attach + immediately send a message |",
     "| `/sessions` | List recent local Claude CLI sessions |",
     "| `/detach` | Detach from external session, return to normal |",
     "| `/create-agent <name> <desc>` | Create a new agent persona |",
@@ -750,7 +822,12 @@ async function handleHelpCommand(ctx: CommandContext): Promise<void> {
     "",
     "**Session Transfer**",
     "",
-    "Run Claude Code locally (terminal / VS Code), then send `/resume` here to pick up where you left off. The bot automatically finds your latest session and continues the conversation with full context.",
+    "Run Claude Code locally (terminal / VS Code), then send `/reuse` here to pick up where you left off. The bot automatically finds your latest session and continues the conversation with full context.",
+    "",
+    "**From CLI**: You can also trigger reuse via the WebUI API:",
+    "```",
+    'curl -X POST http://127.0.0.1:<port>/api/reuse -H "Content-Type: application/json" -d \'{"message":"<output to send>"}\'',
+    "```",
   ].join("\n");
 
   await sender.sendMarkdown(chatID, `${atPrefix}${help}`, messageID);
