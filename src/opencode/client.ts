@@ -91,10 +91,10 @@ function execOpenCode(
     ? `[SYSTEM INSTRUCTIONS]\n${systemPrompt}\n[END SYSTEM INSTRUCTIONS]\n\n${prompt}`
     : prompt;
 
-  // opencode run "prompt" --format json [--model provider/model] [-f file]*
+  // opencode run --format json [--model provider/model] [-f file]*
+  // Prompt is piped via stdin to avoid command-line length limits on Windows
   const args = [
     "run",
-    fullPrompt,
     "--format", "json",
   ];
 
@@ -132,6 +132,9 @@ function execOpenCode(
       },
     );
 
+    // Write prompt to stdin and close (avoids command-line length limits)
+    proc.stdin?.on("error", () => {});
+    proc.stdin?.write(fullPrompt);
     proc.stdin?.end();
   });
 }

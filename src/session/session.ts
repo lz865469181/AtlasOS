@@ -6,8 +6,8 @@ export interface Message {
 
 import type { BackendType } from "../config.js";
 
-/** Default model for all sessions. */
-export const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
+/** Default model for all sessions. Empty = let CLI use its own default. */
+export const DEFAULT_MODEL = "";
 
 /** Available models per backend. */
 export const BACKEND_MODELS: Record<BackendType, Record<string, string>> = {
@@ -36,7 +36,7 @@ export const DEFAULT_MODELS: Record<BackendType, string> = {
 
 export class Session {
   readonly id: string;
-  readonly agentID: string;
+  agentID: string;
   readonly userID: string;
   readonly conversation: Message[] = [];
   readonly createdAt: number;
@@ -78,9 +78,16 @@ export class Session {
     this.cliWorkDir = undefined;
   }
 
+  /** Maximum number of messages to keep in conversation history. */
+  private static readonly MAX_CONVERSATION_SIZE = 200;
+
   addMessage(role: "user" | "assistant", content: string): void {
     this.conversation.push({ role, content, timestamp: Date.now() });
     this.lastActiveAt = Date.now();
+    // Trim oldest messages to prevent unbounded memory growth
+    if (this.conversation.length > Session.MAX_CONVERSATION_SIZE) {
+      this.conversation.splice(0, this.conversation.length - Session.MAX_CONVERSATION_SIZE);
+    }
   }
 
   /** Build conversation history as text for context injection. */
@@ -119,7 +126,7 @@ export class Session {
     session.cliSessionId = data.cliSessionId ?? crypto.randomUUID();
     session.cliWorkDir = data.cliWorkDir ?? undefined;
     session.contextOverflowCount = data.contextOverflowCount ?? 0;
-    (session as any).createdAt = data.createdAt ?? Date.now();
+    Object.defineProperty(session, "createdAt", { value: data.createdAt ?? Date.now() });
     session.lastActiveAt = data.lastActiveAt ?? Date.now();
 
     if (Array.isArray(data.conversation)) {

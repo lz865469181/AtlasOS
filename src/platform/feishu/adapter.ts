@@ -1,5 +1,7 @@
 import * as lark from "@larksuiteoapi/node-sdk";
-import type { PlatformAdapter, PlatformSender, MessageHandler, MessageEvent, CardActionHandler } from "../types.js";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import type { PlatformAdapter, PlatformSender, MessageHandler, MessageEvent, Attachment, CardActionHandler } from "../types.js";
 import { FeishuClient } from "./client.js";
 
 function log(level: string, msg: string, meta?: Record<string, unknown>): void {
@@ -45,11 +47,14 @@ export class FeishuAdapter implements PlatformAdapter {
   private readonly MAX_AGE_MS = 2 * 60 * 1000; // 2 minutes
   /** Optional card action handler for interactive card button clicks. */
   private cardActionHandler: CardActionHandler | null = null;
+  /** Root directory for file downloads. */
+  private uploadsRoot: string | null = null;
 
-  constructor(appId: string, appSecret: string) {
+  constructor(appId: string, appSecret: string, uploadsRoot?: string) {
     this.appId = appId;
     this.appSecret = appSecret;
     this.feishuClient = new FeishuClient(appId, appSecret);
+    this.uploadsRoot = uploadsRoot ?? null;
   }
 
   /** Register a handler for interactive card button clicks (used by HTTP callback route). */
@@ -79,7 +84,7 @@ export class FeishuAdapter implements PlatformAdapter {
           }
 
           // Timestamp check: discard messages older than 2 minutes
-          const createTimeMs = parseInt(data.message?.create_time, 10);
+          const createTimeMs = Number(data.message?.create_time);
           if (createTimeMs) {
             const ageMs = Date.now() - createTimeMs;
             if (ageMs > this.MAX_AGE_MS) {
@@ -91,7 +96,7 @@ export class FeishuAdapter implements PlatformAdapter {
             }
           }
 
-          const event = this.parseMessageEvent(data);
+          const event = await this.parseMessageEvent(data);
           if (!event) return;
 
           // Mark as processed
@@ -129,7 +134,7 @@ export class FeishuAdapter implements PlatformAdapter {
     }
   }
 
-  private parseMessageEvent(data: FeishuMessageEvent): MessageEvent | null {
+  private async parseMessageEvent(data: FeishuMessageEvent): Promise<MessageEvent | null> {
     const { message, sender } = data;
 
     const chatID = message.chat_id;
@@ -137,19 +142,49 @@ export class FeishuAdapter implements PlatformAdapter {
     const messageID = message.message_id;
     const userID = sender.sender_id?.open_id ?? "unknown";
 
-    // Only handle text messages for now
-    if (message.message_type !== "text") {
-      log("debug", "Skipping non-text message", { type: message.message_type });
-      return null;
-    }
-
-    // Parse text content (content field is JSON string: {"text": "hello"})
     let text = "";
-    try {
-      const content = JSON.parse(message.content);
-      text = content.text ?? "";
-    } catch {
-      text = message.content ?? "";
+    const attachments: Attachment[] = [];
+
+    if (message.message_type === "text") {
+      // Parse text content (content field is JSON string: {"text": "hello"})
+      try {
+        const content = JSON.parse(message.content);
+        text = content.text ?? "";
+      } catch {
+        text = message.content ?? "";
+      }
+    } else if (message.message_type === "image") {
+      // Image message: download and attach
+      try {
+        const content = JSON.parse(message.content);
+        const imageKey = content.image_key;
+        if (imageKey && this.uploadsRoot) {
+          const attachment = await this.downloadImage(imageKey, userID, messageID);
+          if (attachment) attachments.push(attachment);
+          text = "(see attached image)";
+        }
+      } catch (err) {
+        log("warn", "Failed to process image message", { error: String(err) });
+        return null;
+      }
+    } else if (message.message_type === "file") {
+      // File message: download and attach
+      try {
+        const content = JSON.parse(message.content);
+        const fileKey = content.file_key;
+        const fileName = content.file_name ?? "file";
+        if (fileKey && this.uploadsRoot) {
+          const attachment = await this.downloadFile(fileKey, fileName, userID, messageID);
+          if (attachment) attachments.push(attachment);
+          text = `(see attached file: ${fileName})`;
+        }
+      } catch (err) {
+        log("warn", "Failed to process file message", { error: String(err) });
+        return null;
+      }
+    } else {
+      log("debug", "Skipping unsupported message type", { type: message.message_type });
+      return null;
     }
 
     // Check for @mention (in group chats)
@@ -165,7 +200,7 @@ export class FeishuAdapter implements PlatformAdapter {
       }
     }
 
-    if (!text.trim()) return null;
+    if (!text.trim() && attachments.length === 0) return null;
 
     return {
       platform: "feishu",
@@ -175,7 +210,69 @@ export class FeishuAdapter implements PlatformAdapter {
       userID,
       text: text.trim(),
       isMention,
+      attachments: attachments.length > 0 ? attachments : undefined,
       raw: data,
     };
+  }
+
+  /**
+   * Download an image from Feishu and save to uploads directory.
+   * Returns an Attachment descriptor, or null on failure.
+   */
+  private async downloadImage(imageKey: string, userID: string, messageID: string): Promise<Attachment | null> {
+    if (!this.uploadsRoot) return null;
+    try {
+      const sanitizedUser = userID.replace(/[\\/]/g, "_").replace(/\.\./g, "_");
+      const userUploads = join(this.uploadsRoot, sanitizedUser);
+      // Verify resolved path stays within uploads root
+      if (!resolve(userUploads).startsWith(resolve(this.uploadsRoot))) return null;
+      mkdirSync(userUploads, { recursive: true });
+      const filename = `${messageID}_${imageKey}.png`;
+      const filepath = join(userUploads, filename);
+
+      const resp: any = await this.feishuClient.getLarkClient().im.messageResource.get({
+        path: { message_id: messageID, file_key: imageKey },
+        params: { type: "image" },
+      });
+      if (resp && Buffer.isBuffer(resp)) {
+        writeFileSync(filepath, resp);
+        log("info", "Image downloaded", { imageKey, path: filepath });
+      }
+
+      return { type: "image", path: filepath, name: filename, mimeType: "image/png" };
+    } catch (err) {
+      log("warn", "Failed to download image", { imageKey, error: String(err) });
+      return null;
+    }
+  }
+
+  /**
+   * Download a file from Feishu and save to uploads directory.
+   */
+  private async downloadFile(fileKey: string, fileName: string, userID: string, messageID: string): Promise<Attachment | null> {
+    if (!this.uploadsRoot) return null;
+    try {
+      const sanitizedUser = userID.replace(/[\\/]/g, "_").replace(/\.\./g, "_");
+      const userUploads = join(this.uploadsRoot, sanitizedUser);
+      // Verify resolved path stays within uploads root
+      if (!resolve(userUploads).startsWith(resolve(this.uploadsRoot))) return null;
+      mkdirSync(userUploads, { recursive: true });
+      const safeName = `${messageID}_${fileName.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+      const filepath = join(userUploads, safeName);
+
+      const resp: any = await this.feishuClient.getLarkClient().im.messageResource.get({
+        path: { message_id: messageID, file_key: fileKey },
+        params: { type: "file" },
+      });
+      if (resp && Buffer.isBuffer(resp)) {
+        writeFileSync(filepath, resp);
+        log("info", "File downloaded", { fileKey, path: filepath });
+      }
+
+      return { type: "file", path: filepath, name: fileName };
+    } catch (err) {
+      log("warn", "Failed to download file", { fileKey, error: String(err) });
+      return null;
+    }
   }
 }

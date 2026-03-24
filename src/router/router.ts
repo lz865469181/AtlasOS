@@ -3,12 +3,17 @@ import type { SessionManager } from "../session/manager.js";
 import type { SessionQueue } from "../session/queue.js";
 import type { Workspace } from "../workspace/workspace.js";
 import type { ContextManager } from "../context/manager.js";
+import type { MemoryExtractor } from "../memory/extractor.js";
 import { ask, askStreaming } from "../backend/index.js";
 import { buildSystemPrompt, buildRecoverySystemPrompt } from "../claude/context-builder.js";
 import { classifyError, ErrorType } from "../error/classifier.js";
 import { emit } from "../webui/events.js";
 import { handleCommand } from "./commands.js";
 import { pickReactionEmoji } from "./sentiment.js";
+import { parseClarification, buildClarificationCard } from "./clarification.js";
+import { parseSpawnTasks } from "./task-spawner.js";
+import { TaskRunner } from "../runner/task-runner.js";
+import type { TaskDefinition } from "../runner/task-runner.js";
 
 function log(level: string, msg: string, meta?: Record<string, unknown>): void {
   const entry = { time: new Date().toISOString(), level, msg, ...meta };
@@ -20,6 +25,7 @@ export interface RouterDeps {
   sessionQueue: SessionQueue;
   workspace: Workspace;
   contextManager?: ContextManager;
+  memoryExtractor?: MemoryExtractor;
 }
 
 /** Minimum interval between Feishu message updates (ms). */
@@ -28,7 +34,7 @@ const STREAM_THROTTLE_MS = 1500;
 const STREAM_MIN_CHARS = 300;
 
 export function createRouter(deps: RouterDeps) {
-  const { sessionManager, sessionQueue, workspace, contextManager } = deps;
+  const { sessionManager, sessionQueue, workspace, contextManager, memoryExtractor } = deps;
 
   return async function handle(
     event: MessageEvent,
@@ -48,11 +54,15 @@ export function createRouter(deps: RouterDeps) {
     // Add "thinking" reaction while processing
     sender.addReaction(messageID, "THINKING").catch(() => {});
 
-    const agentID = workspace.agentID;
-    const session = sessionManager.getOrCreate(agentID, userID);
+    const session = sessionManager.getOrCreate(workspace.agentID, userID);
+
+    // Resolve workspace for the session's current agent (may differ from default after /switch-agent)
+    const effectiveWorkspace = session.agentID !== workspace.agentID
+      ? workspace.forAgent(session.agentID)
+      : workspace;
 
     // Ensure user workspace exists
-    const userDir = workspace.initUser(userID);
+    const userDir = effectiveWorkspace.initUser(userID);
 
     // Check for slash commands (/feedback, /model, etc.)
     const cmdResult = await handleCommand({ event, sender, session, workspace });
@@ -65,10 +75,19 @@ export function createRouter(deps: RouterDeps) {
     // use that as the actual prompt for the CLI request
     const promptText = cmdResult.rewrittenText ?? text;
 
+    // Prepend attachment context to prompt if files/images were downloaded
+    let fullPrompt = promptText;
+    if (event.attachments && event.attachments.length > 0) {
+      const attachInfo = event.attachments
+        .map((a) => `[Attached ${a.type}: ${a.name} → ${a.path}]`)
+        .join("\n");
+      fullPrompt = `${attachInfo}\n\n${promptText}`;
+    }
+
     try {
       const reply = await sessionQueue.enqueue(session.id, async () => {
         // Record user message
-        session.addMessage("user", promptText);
+        session.addMessage("user", fullPrompt);
 
         // Summarize context if approaching token limits
         if (contextManager) {
@@ -78,7 +97,7 @@ export function createRouter(deps: RouterDeps) {
         }
 
         // Build system context (SOUL + MEMORY) — conversation is managed by CLI session
-        const systemPrompt = buildSystemPrompt(workspace, userID);
+        const systemPrompt = buildSystemPrompt(effectiveWorkspace, userID);
 
         emit("backend", { action: "ask", userID, model: session.model });
 
@@ -90,7 +109,7 @@ export function createRouter(deps: RouterDeps) {
 
         try {
           const responseText = await handleStreamingResponse({
-            prompt: promptText,
+            prompt: fullPrompt,
             systemPrompt,
             workDir: effectiveWorkDir,
             addDirs,
@@ -106,6 +125,40 @@ export function createRouter(deps: RouterDeps) {
           session.addMessage("assistant", responseText);
           return responseText;
         } catch (err: any) {
+          // Session locked by another process — retry with a fresh session ID
+          if (err.sessionInUse) {
+            const oldId = session.cliSessionId;
+            session.cliSessionId = crypto.randomUUID();
+            log("warn", "Session in use — retrying with new session ID", {
+              userID,
+              oldSessionId: oldId,
+              newSessionId: session.cliSessionId,
+            });
+
+            // Replay recent history into system prompt so new session has context
+            const recentHistory = session.getConversationText(10);
+            const recoveryPrompt = buildRecoverySystemPrompt(effectiveWorkspace, userID, recentHistory);
+
+            emit("backend", { action: "ask-session-recovery", userID, model: session.model });
+
+            const responseText = await handleStreamingResponse({
+              prompt: fullPrompt,
+              systemPrompt: recoveryPrompt,
+              workDir: effectiveWorkDir,
+              addDirs,
+              sessionId: session.cliSessionId,
+              model: session.model,
+              sender,
+              chatID,
+              chatType,
+              userID,
+              messageID,
+            });
+
+            session.addMessage("assistant", responseText);
+            return responseText;
+          }
+
           if (err.contextOverflow) {
             log("warn", "Context overflow — resetting CLI session", {
               userID,
@@ -116,13 +169,13 @@ export function createRouter(deps: RouterDeps) {
             session.resetCliSession();
 
             const recentHistory = session.getConversationText(10);
-            const recoveryPrompt = buildRecoverySystemPrompt(workspace, userID, recentHistory);
+            const recoveryPrompt = buildRecoverySystemPrompt(effectiveWorkspace, userID, recentHistory);
 
             emit("backend", { action: "ask-recovery", userID, model: session.model });
 
             // Recovery uses buffered mode for reliability
             const result = await ask({
-              prompt: promptText,
+              prompt: fullPrompt,
               systemPrompt: recoveryPrompt,
               workDir: userDir,
               addDirs: [userDir],
@@ -144,22 +197,80 @@ export function createRouter(deps: RouterDeps) {
         text: reply.slice(0, 200),
       });
 
+      // --- Post-process: detect clarification requests ---
+      const clarification = parseClarification(reply);
+      if (clarification) {
+        log("info", "Clarification requested by agent", {
+          userID,
+          type: clarification.type,
+          question: clarification.question,
+        });
+        const card = buildClarificationCard(clarification, session.id);
+        await sender.sendInteractiveCard(chatID, card, messageID);
+        emit("clarification", { userID, type: clarification.type, question: clarification.question });
+      }
+
+      // --- Post-process: detect autonomous task spawning ---
+      const spawnedTasks = parseSpawnTasks(reply);
+      if (spawnedTasks) {
+        log("info", "Agent requested task spawning", { userID, taskCount: spawnedTasks.length });
+
+        const userDir = workspace.initUser(userID);
+        const taskDefs: TaskDefinition[] = spawnedTasks.map((t, i) => ({
+          id: `auto-${i + 1}`,
+          description: t.description,
+          prompt: t.description,
+          workDir: session.cliWorkDir ?? userDir,
+        }));
+
+        const runner = new TaskRunner({ model: session.model || undefined });
+        // Fire-and-forget: run tasks and inject results into next conversation turn
+        runner.runParallel(taskDefs, sender, chatID, userID, chatType).then((results) => {
+          const summary = results
+            .map((r) => `[${r.status}] ${r.description}: ${r.result.slice(0, 500)}`)
+            .join("\n\n");
+          session.addMessage("user", `[Task Results]\n${summary}`);
+          log("info", "Spawned task results injected", { userID, count: results.length });
+        }).catch((err) => {
+          log("warn", "Spawned task execution failed", { userID, error: String(err) });
+        });
+
+        emit("task-spawn", { userID, taskCount: spawnedTasks.length });
+      }
+
       // Add sentiment-based reaction emoji
       const emoji = pickReactionEmoji(reply);
       sender.addReaction(messageID, emoji).catch(() => {});
 
+      // Fire-and-forget: extract memory facts from conversation turn
+      if (memoryExtractor) {
+        memoryExtractor.extract(userID, fullPrompt, reply).catch((err) => {
+          log("warn", "Memory extraction failed", { userID, error: String(err) });
+        });
+      }
+
+      // Schedule session save to disk
+      sessionManager.scheduleSave();
+
       log("info", "Sent reply", { platform, userID, replyLen: reply.length });
     } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      log("error", "Failed to process message", { userID, error: errMsg });
+      const classified = classifyError(err instanceof Error ? err : new Error(String(err)));
+      log("error", "Failed to process message", {
+        userID,
+        errorType: classified.type,
+        error: classified.message,
+      });
 
-      emit("error", { userID, error: errMsg });
+      emit("error", { userID, errorType: classified.type, error: classified.message });
 
-      await sender.sendText(
-        chatID,
-        `Sorry, I encountered an error processing your message. Please try again.`,
-        messageID,
-      ).catch(() => {});
+      // Don't send a duplicate error message if the streaming handler already showed it
+      if (!(err as any)?.streamingHandled) {
+        await sender.sendText(
+          chatID,
+          classified.userMessage,
+          messageID,
+        ).catch(() => {});
+      }
     }
   };
 }
@@ -220,11 +331,18 @@ async function handleStreamingResponse(options: {
     }
   } catch (err) {
     // If we already sent a partial message, update it with error indicator
+    // and mark the error as handled so the outer catch doesn't send a duplicate
     if (replyMessageID && finalText) {
       await sender.updateMarkdown(
         replyMessageID,
         `${atPrefix}${finalText}\n\n_[Response interrupted]_`,
       ).catch(() => {});
+      const handled = new Error((err as Error).message);
+      (handled as any).streamingHandled = true;
+      // Propagate contextOverflow / sessionInUse flags for outer recovery logic
+      if ((err as any).contextOverflow) (handled as any).contextOverflow = true;
+      if ((err as any).sessionInUse) (handled as any).sessionInUse = true;
+      throw handled;
     }
     throw err;
   }

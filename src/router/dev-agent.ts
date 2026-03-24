@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { getConfig, parseDuration } from "../config.js";
-import { getCliPath, buildSpawnArgs } from "../backend/index.js";
+import { getCliPath, buildSpawnArgs, getStdinPrompt } from "../backend/index.js";
 import { emit } from "../webui/events.js";
 import type { PlatformSender } from "../platform/types.js";
 
@@ -88,6 +88,8 @@ export interface DevAgentOptions {
   sender: PlatformSender;
   /** Original message ID for reactions. */
   messageID: string;
+  /** Model to use (from session). Falls back to DEFAULT_MODEL. */
+  model?: string;
 }
 
 /**
@@ -95,10 +97,12 @@ export interface DevAgentOptions {
  * reporting back to Feishu.
  */
 export function spawnDevAgent(options: DevAgentOptions): void {
-  const { task, workDir, chatID, userID, chatType, sender, messageID } = options;
+  const { task, workDir, chatID, userID, chatType, sender, messageID, model } = options;
   const config = getConfig();
   const cliPath = getCliPath();
-  const timeoutMs = parseDuration(config.agent.timeout);
+  // Dev agent needs much more time than simple Q&A (4 phases: plan, implement, test, commit)
+  const baseTimeout = parseDuration(config.agent.timeout);
+  const timeoutMs = Math.max(baseTimeout * 5, 10 * 60 * 1000); // at least 10 minutes
 
   const atPrefix = chatType === "group" ? `<at id=${userID}></at>\n` : "";
   const devPrompt = buildDevPrompt(task);
@@ -106,8 +110,8 @@ export function spawnDevAgent(options: DevAgentOptions): void {
   const args = buildSpawnArgs({
     prompt: devPrompt,
     outputFormat: "stream-json",
-    model: "claude-sonnet-4-6",
     addDirs: [workDir],
+    permissionMode: "auto",
   });
 
   log("info", "Spawning dev agent", { userID, workDir, taskLen: task.length });
@@ -116,8 +120,17 @@ export function spawnDevAgent(options: DevAgentOptions): void {
     cwd: workDir,
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
-    timeout: timeoutMs,
   });
+
+  // Manual timeout since spawn() does not support the timeout option
+  const killTimer = setTimeout(() => {
+    child.kill("SIGTERM");
+  }, timeoutMs);
+
+  // Write prompt to stdin (avoids command-line length limits on Windows)
+  const stdinPrompt = getStdinPrompt({ prompt: devPrompt });
+  child.stdin?.write(stdinPrompt);
+  child.stdin?.end();
 
   let fullOutput = "";
   let stderr = "";
@@ -134,9 +147,8 @@ export function spawnDevAgent(options: DevAgentOptions): void {
         const label = PHASE_LABELS[phase];
         const emoji = PHASE_EMOJI[phase];
 
-        // Send progress update (fire-and-forget)
+        // Send progress update (fire-and-forget), no per-phase reaction
         sender.sendMarkdown(chatID, `${atPrefix}**Dev Agent** — ${label}`).catch(() => {});
-        sender.addReaction(messageID, emoji).catch(() => {});
 
         log("info", "Dev agent phase", { userID, phase });
         emit("dev-agent", { status: "phase", userID, phase });
@@ -145,16 +157,67 @@ export function spawnDevAgent(options: DevAgentOptions): void {
   });
 
   child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
-  child.stdin?.end();
 
-  child.on("close", async (code) => {
+  child.on("close", async (code, signal) => {
+    clearTimeout(killTimer);
     try {
       if (code !== 0) {
-        log("error", "Dev agent subprocess failed", { code, stderr: stderr.slice(0, 500) });
-        emit("error", { source: "dev-agent", userID, error: stderr.slice(0, 200) });
+        // Detect timeout / signal kill (code === null means killed by signal)
+        if (code === null) {
+          const reason = signal ? `killed by signal ${signal}` : "timed out";
+          log("error", "Dev agent subprocess killed", { signal, stderr: stderr.slice(0, 500) });
+          emit("error", { source: "dev-agent", userID, error: reason });
+
+          // Even though it timed out, it may have completed some phases — show partial result
+          const partialResult = extractResult(fullOutput);
+          const phaseSummary = PHASES.map((p) => {
+            const done = reportedPhases.has(p);
+            return `- [${done ? "x" : " "}] ${p}`;
+          }).join("\n");
+
+          await sender.sendMarkdown(
+            chatID,
+            [
+              `${atPrefix}**Dev Agent — ${reason}**`,
+              "",
+              phaseSummary,
+              "",
+              partialResult ? `**Partial result:**\n${partialResult.slice(0, 2000)}` : "",
+            ].filter(Boolean).join("\n"),
+          );
+          sender.addReaction(messageID, "CRY").catch(() => {});
+          return;
+        }
+
+        // Extract error from stream-json output if stderr is empty
+        let errorDetail = stderr.trim();
+        if (!errorDetail && fullOutput) {
+          // Try to find error messages in stream-json lines
+          const lines = fullOutput.trim().split("\n");
+          for (let i = lines.length - 1; i >= 0; i--) {
+            try {
+              const obj = JSON.parse(lines[i]!);
+              if (obj.type === "error" || (obj.type === "result" && obj.is_error)) {
+                errorDetail = obj.error || obj.result || JSON.stringify(obj);
+                break;
+              }
+            } catch { /* not JSON */ }
+          }
+          // Fallback: show last portion of stderr or a generic message
+          if (!errorDetail) {
+            errorDetail = "Process exited with no error details. Check server logs.";
+          }
+        }
+
+        log("error", "Dev agent subprocess failed", {
+          code,
+          stderr: stderr.slice(0, 500),
+          stdout_tail: fullOutput.slice(-500),
+        });
+        emit("error", { source: "dev-agent", userID, error: errorDetail.slice(0, 200) });
         await sender.sendMarkdown(
           chatID,
-          `${atPrefix}**Dev Agent Failed**\n\nExit code: ${code}\n\n\`\`\`\n${stderr.slice(0, 1000)}\n\`\`\``,
+          `${atPrefix}**Dev Agent Failed**\n\nExit code: ${code}\n\n\`\`\`\n${errorDetail.slice(0, 1500)}\n\`\`\``,
         );
         sender.addReaction(messageID, "CRY").catch(() => {});
         return;

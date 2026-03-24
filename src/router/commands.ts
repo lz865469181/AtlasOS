@@ -5,10 +5,13 @@ import { getConfig } from "../config.js";
 import { buildSystemPrompt } from "../claude/context-builder.js";
 import type { Workspace } from "../workspace/workspace.js";
 import { modelSelectionCard } from "../platform/feishu/cards.js";
+import { resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { getCliPath, buildSpawnArgs, getStdinPrompt } from "../backend/index.js";
 import { emit } from "../webui/events.js";
 import { spawnDevAgent } from "./dev-agent.js";
+import { TaskRunner } from "../runner/task-runner.js";
+import type { TaskDefinition } from "../runner/task-runner.js";
 import { findSessionFile, extractSessionMeta, listRecentSessions } from "../claude/sessions.js";
 
 function log(level: string, msg: string, meta?: Record<string, unknown>): void {
@@ -71,6 +74,13 @@ export async function handleCommand(ctx: CommandContext): Promise<CommandResult>
     return { handled: true };
   }
 
+  // /run "task1" "task2" ... — run multiple tasks in parallel
+  if (text.startsWith("/run")) {
+    const content = text.slice("/run".length).trim();
+    await handleRunCommand(ctx, content);
+    return { handled: true };
+  }
+
   // /sessions — list recent local Claude CLI sessions
   if (text === "/sessions") {
     await handleSessionsCommand(ctx);
@@ -87,6 +97,26 @@ export async function handleCommand(ctx: CommandContext): Promise<CommandResult>
   // /detach — detach from external session, return to normal
   if (text === "/detach") {
     await handleDetachCommand(ctx);
+    return { handled: true };
+  }
+
+  // /create-agent <name> <description> — create a new agent persona
+  if (text.startsWith("/create-agent")) {
+    const content = text.slice("/create-agent".length).trim();
+    await handleCreateAgentCommand(ctx, content);
+    return { handled: true };
+  }
+
+  // /switch-agent <name> — switch to a different agent persona
+  if (text.startsWith("/switch-agent")) {
+    const content = text.slice("/switch-agent".length).trim();
+    await handleSwitchAgentCommand(ctx, content);
+    return { handled: true };
+  }
+
+  // /list-agents — list all available agents
+  if (text === "/list-agents" || text === "/agents") {
+    await handleListAgentsCommand(ctx);
     return { handled: true };
   }
 
@@ -301,7 +331,17 @@ async function handleDevCommand(ctx: CommandContext, arg: string): Promise<void>
 
   const repoMatch = arg.match(/^--repo\s+(\S+)\s+([\s\S]+)$/);
   if (repoMatch) {
-    workDir = repoMatch[1]!;
+    const requestedDir = resolve(repoMatch[1]!);
+    const allowedRoot = resolve(process.cwd());
+    if (!requestedDir.startsWith(allowedRoot)) {
+      await sender.sendMarkdown(
+        chatID,
+        `${atPrefix}**Error**: The --repo path must be within the project root (\`${allowedRoot}\`).`,
+        messageID,
+      );
+      return;
+    }
+    workDir = requestedDir;
     task = repoMatch[2]!.trim();
   } else {
     // Default: use the project root directory
@@ -331,6 +371,76 @@ async function handleDevCommand(ctx: CommandContext, arg: string): Promise<void>
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * /run "task1" "task2" ... — Run multiple tasks in parallel via TaskRunner.
+ * Tasks can be quoted strings or newline-separated lines.
+ */
+async function handleRunCommand(ctx: CommandContext, arg: string): Promise<void> {
+  const { event, sender, workspace } = ctx;
+  const { chatID, messageID, userID, chatType } = event;
+  const atPrefix = chatType === "group" ? `<at id=${userID}></at>\n` : "";
+
+  if (!arg) {
+    await sender.sendMarkdown(
+      chatID,
+      `${atPrefix}**Usage:**\n\`/run "research topic A" "research topic B" "summarize findings"\`\n\nOr one task per line:\n\`/run\nanalyze module A\nanalyze module B\ncompare results\``,
+      messageID,
+    );
+    return;
+  }
+
+  // Parse tasks: either quoted strings or newline-separated
+  const tasks = parseTaskList(arg);
+
+  if (tasks.length === 0) {
+    await sender.sendText(chatID, "No tasks parsed. Provide quoted strings or one task per line.", messageID);
+    return;
+  }
+
+  if (tasks.length === 1) {
+    await sender.sendText(chatID, "Only 1 task provided — use normal chat for single tasks. /run is for parallel execution.", messageID);
+    return;
+  }
+
+  sender.addReaction(messageID, "ONIT").catch(() => {});
+
+  const workDir = workspace.initUser(userID);
+  const taskDefs: TaskDefinition[] = tasks.map((desc, i) => ({
+    id: `T${i + 1}`,
+    description: desc,
+    prompt: desc,
+    workDir,
+  }));
+
+  log("info", "Running parallel tasks", { userID, taskCount: taskDefs.length });
+  emit("command", { command: "/run", userID, taskCount: taskDefs.length });
+
+  const runner = new TaskRunner({ model: ctx.session.model });
+  // Fire-and-forget — TaskRunner handles its own progress reporting
+  runner.runParallel(taskDefs, sender, chatID, userID, chatType).catch((err) => {
+    log("error", "TaskRunner failed", { userID, error: String(err) });
+    sender.sendMarkdown(chatID, `${atPrefix}**Task Runner Error**\n\n${String(err)}`).catch(() => {});
+  });
+}
+
+/**
+ * Parse task descriptions from user input.
+ * Supports: "task 1" "task 2" "task 3" (quoted)
+ * Or newline-separated lines.
+ */
+function parseTaskList(input: string): string[] {
+  // Try quoted strings first: "task1" "task2"
+  const quoted = [...input.matchAll(/"([^"]+)"/g)].map((m) => m[1]!.trim());
+  if (quoted.length >= 2) return quoted;
+
+  // Fall back to newline-separated
+  const lines = input.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+  if (lines.length >= 2) return lines;
+
+  // Single item
+  return lines;
+}
 
 /**
  * /sessions — List recent local Claude CLI sessions.
@@ -464,6 +574,153 @@ async function handleDetachCommand(ctx: CommandContext): Promise<void> {
 }
 
 /**
+ * /create-agent <name> <description> — Create a new agent persona.
+ * The bot generates a SOUL.md file for the new agent based on the description.
+ */
+async function handleCreateAgentCommand(ctx: CommandContext, arg: string): Promise<void> {
+  const { event, sender, workspace } = ctx;
+  const { chatID, messageID, chatType, userID } = event;
+  const atPrefix = chatType === "group" ? `<at id=${userID}></at>\n` : "";
+
+  if (!arg) {
+    await sender.sendMarkdown(
+      chatID,
+      `${atPrefix}**Usage:**\n\`/create-agent <name> <description>\`\n\nExample: \`/create-agent code-reviewer A meticulous code reviewer focused on security and best practices\``,
+      messageID,
+    );
+    return;
+  }
+
+  // Parse: first word is name, rest is description
+  const parts = arg.split(/\s+/);
+  const agentName = parts[0]!.toLowerCase().replace(/[^a-z0-9_-]/g, "-");
+  const description = parts.slice(1).join(" ").trim();
+
+  if (!agentName) {
+    await sender.sendText(chatID, "Agent name is required.", messageID);
+    return;
+  }
+
+  if (workspace.agentExists(agentName)) {
+    await sender.sendMarkdown(
+      chatID,
+      `${atPrefix}Agent **${agentName}** already exists. Use \`/switch-agent ${agentName}\` to switch to it.`,
+      messageID,
+    );
+    return;
+  }
+
+  // Generate SOUL.md content
+  const soulContent = [
+    `## Values`,
+    description ? `- ${description}` : "- Be helpful and accurate",
+    "",
+    `## Behavior`,
+    `- Focus on quality and thoroughness`,
+    `- Ask for clarification when requirements are unclear`,
+    "",
+    `## Expertise`,
+    description ? `- Specialized in: ${description}` : "- General-purpose assistant",
+    "",
+  ].join("\n");
+
+  try {
+    workspace.createAgent(agentName, soulContent, description);
+
+    await sender.sendMarkdown(
+      chatID,
+      `${atPrefix}**Agent Created: ${agentName}**\n\n${description ? `> ${description}\n\n` : ""}Use \`/switch-agent ${agentName}\` to activate it.\nEdit the SOUL.md file in the workspace to customize behavior.`,
+      messageID,
+    );
+
+    log("info", "Agent created", { userID, agentName, description });
+    emit("command", { command: "/create-agent", userID, agentName });
+  } catch (err) {
+    await sender.sendText(chatID, `Failed to create agent: ${String(err)}`, messageID);
+  }
+}
+
+/**
+ * /switch-agent <name> — Switch to a different agent persona.
+ * This changes the session's agentID and resets the CLI session.
+ */
+async function handleSwitchAgentCommand(ctx: CommandContext, arg: string): Promise<void> {
+  const { event, sender, session, workspace } = ctx;
+  const { chatID, messageID, chatType, userID } = event;
+  const atPrefix = chatType === "group" ? `<at id=${userID}></at>\n` : "";
+
+  if (!arg) {
+    await sender.sendMarkdown(
+      chatID,
+      `${atPrefix}**Usage:** \`/switch-agent <name>\`\n\nUse \`/list-agents\` to see available agents.`,
+      messageID,
+    );
+    return;
+  }
+
+  const agentName = arg.trim().toLowerCase();
+
+  if (!workspace.agentExists(agentName)) {
+    await sender.sendMarkdown(
+      chatID,
+      `${atPrefix}Agent **${agentName}** not found.\n\nUse \`/list-agents\` to see available agents, or \`/create-agent\` to create a new one.`,
+      messageID,
+    );
+    return;
+  }
+
+  // Switch the session to the new agent
+  const oldAgent = session.agentID;
+  session.agentID = agentName;
+  session.resetCliSession(); // fresh CLI session for new persona
+
+  await sender.sendMarkdown(
+    chatID,
+    `${atPrefix}**Switched to agent: ${agentName}**\n\nPrevious: \`${oldAgent}\`\nCLI session reset for new persona.`,
+    messageID,
+  );
+
+  log("info", "User switched agent", { userID, from: oldAgent, to: agentName });
+  emit("command", { command: "/switch-agent", userID, from: oldAgent, to: agentName });
+}
+
+/**
+ * /list-agents — List all available agent personas.
+ */
+async function handleListAgentsCommand(ctx: CommandContext): Promise<void> {
+  const { event, sender, session, workspace } = ctx;
+  const { chatID, messageID, chatType, userID } = event;
+  const atPrefix = chatType === "group" ? `<at id=${userID}></at>\n` : "";
+
+  const agents = workspace.listAgents();
+
+  if (agents.length === 0) {
+    await sender.sendMarkdown(
+      chatID,
+      `${atPrefix}No agents found. Use \`/create-agent <name> <description>\` to create one.`,
+      messageID,
+    );
+    return;
+  }
+
+  const currentAgent = session.agentID;
+  const lines = agents.map((a) => {
+    const isCurrent = a.id === currentAgent;
+    const marker = isCurrent ? " **(active)**" : "";
+    const desc = a.description ? ` — ${a.description}` : "";
+    return `- \`${a.id}\`${marker}${desc}`;
+  });
+
+  await sender.sendMarkdown(
+    chatID,
+    `${atPrefix}**Available Agents**\n\n${lines.join("\n")}\n\nUse \`/switch-agent <name>\` to switch.`,
+    messageID,
+  );
+
+  emit("command", { command: "/list-agents", userID });
+}
+
+/**
  * /help — Show all available commands.
  */
 async function handleHelpCommand(ctx: CommandContext): Promise<void> {
@@ -481,11 +738,15 @@ async function handleHelpCommand(ctx: CommandContext): Promise<void> {
     "| `/model <name>` | Switch model (haiku / sonnet / opus) |",
     "| `/dev <task>` | Spawn an autonomous dev agent |",
     "| `/dev --repo <path> <task>` | Dev agent on a specific repo |",
+    "| `/run \"task1\" \"task2\" ...` | Run multiple tasks in parallel |",
     "| `/feedback <content>` | Submit feedback for analysis |",
     "| `/resume` | Continue your latest local Claude CLI session |",
     "| `/resume <session-id>` | Continue a specific local session |",
     "| `/sessions` | List recent local Claude CLI sessions |",
     "| `/detach` | Detach from external session, return to normal |",
+    "| `/create-agent <name> <desc>` | Create a new agent persona |",
+    "| `/switch-agent <name>` | Switch to a different agent |",
+    "| `/list-agents` | List all available agents |",
     "",
     "**Session Transfer**",
     "",

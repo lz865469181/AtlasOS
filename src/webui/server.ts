@@ -7,6 +7,8 @@ import { spawn } from "node:child_process";
 import { readRawConfig, writeRawConfig, getConfigPath, getConfig } from "../config.js";
 import { subscribe, unsubscribe, getHistory } from "./events.js";
 import { allAdapters } from "../platform/registry.js";
+import { TOOL_API_KEY_ENV } from "../tools/index.js";
+import { SearchService } from "../tools/index.js";
 import type { Server } from "node:http";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -136,6 +138,22 @@ export function startWebUI(port: number): Server {
       res.status(400).json({ error: "Invalid key format" });
       return;
     }
+    // Block dangerous env vars that could enable code injection or path hijacking
+    const BLOCKED_KEYS = new Set([
+      "NODE_OPTIONS", "NODE_PATH", "PATH", "LD_PRELOAD", "LD_LIBRARY_PATH",
+      "DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH", "HOME", "USERPROFILE",
+      "COMSPEC", "SHELL", "EDITOR", "VISUAL", "PYTHONPATH",
+    ]);
+    if (BLOCKED_KEYS.has(key)) {
+      res.status(403).json({ error: `Setting ${key} is not allowed` });
+      return;
+    }
+    // Only allow keys referenced in config (${VAR} placeholders)
+    const allowedKeys = new Set(getSecretKeys());
+    if (!allowedKeys.has(key)) {
+      res.status(400).json({ error: `Key ${key} is not referenced in config` });
+      return;
+    }
     if (!value || typeof value !== "string") {
       res.status(400).json({ error: "Value required" });
       return;
@@ -222,6 +240,55 @@ export function startWebUI(port: number): Server {
       log("info", "Spawned new process, exiting current");
       process.exit(0);
     }, 500);
+  });
+
+  // --- Tools API keys ---
+
+  app.get("/api/tools/keys", (_req, res) => {
+    const keys = Object.entries(TOOL_API_KEY_ENV).map(([id, envVar]) => ({
+      id,
+      env_var: envVar,
+      is_set: !!process.env[envVar],
+      masked: process.env[envVar] ? maskValue(process.env[envVar]!) : "",
+    }));
+    res.json(keys);
+  });
+
+  app.post("/api/tools/keys", (req, res) => {
+    const { env_var, value } = req.body;
+    if (!env_var || typeof env_var !== "string") {
+      res.status(400).json({ error: "env_var required" });
+      return;
+    }
+    // Validate it's a known tool env var
+    const validKeys = Object.values(TOOL_API_KEY_ENV);
+    if (!validKeys.includes(env_var)) {
+      res.status(400).json({ error: `Unknown tool env var: ${env_var}` });
+      return;
+    }
+    if (!value || typeof value !== "string") {
+      res.status(400).json({ error: "value required" });
+      return;
+    }
+    process.env[env_var] = value;
+    log("info", "Tool API key set via WebUI", { env_var });
+    res.json({ ok: true });
+  });
+
+  app.delete("/api/tools/keys", (req, res) => {
+    const { env_var } = req.body;
+    if (!env_var) {
+      res.status(400).json({ error: "env_var required" });
+      return;
+    }
+    delete process.env[env_var];
+    log("info", "Tool API key removed via WebUI", { env_var });
+    res.json({ ok: true });
+  });
+
+  app.get("/api/tools/status", (_req, res) => {
+    const service = new SearchService();
+    res.json(service.getProviderStatus());
   });
 
   const server = app.listen(port, "127.0.0.1", () => {
