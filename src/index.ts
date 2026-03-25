@@ -20,6 +20,7 @@ import { registerAdapter, allAdapters } from "./platform/registry.js";
 import { FeishuAdapter } from "./platform/feishu/adapter.js";
 import { startWebUI } from "./webui/server.js";
 import { emit } from "./webui/events.js";
+import { createSessionsCommand, createResumeCommand } from "./core/command/builtins.js";
 
 async function main(): Promise<void> {
   // Load configuration
@@ -56,7 +57,14 @@ async function main(): Promise<void> {
     project: agentID,
     dataDir: workspace.agentDir,
     sessionTtlMs,
+    persistPath: join(workspace.agentDir, "sessions.json"),
   });
+
+  // Register builtin commands
+  engine.commands.register(createSessionsCommand(engine.parkedSessions));
+  engine.commands.register(createResumeCommand(engine.parkedSessions, async (cliSessionId, ctx) => {
+    log("info", "Resumed parked session", { cliSessionId, userID: ctx.userID });
+  }));
 
   // ─── Rate Limiting & ACL ─────────────────────────────────────────────
   let rateLimiter: RateLimiter | undefined;
@@ -199,7 +207,10 @@ async function main(): Promise<void> {
   // Start WebUI
   let webuiServer: import("node:http").Server | null = null;
   if (config.webui.enabled) {
-    webuiServer = startWebUI(config.webui.port, { workspace });
+    webuiServer = startWebUI(config.webui.port, {
+      workspace,
+      parkedSessions: engine.parkedSessions,
+    });
   }
 
   // Start Engine (starts all platform adapters)

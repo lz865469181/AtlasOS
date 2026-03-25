@@ -51,9 +51,9 @@ function csrfMiddleware(
 
   // Verify on mutating methods (exempt /api/reuse for programmatic CLI access)
   if (["POST", "PUT", "DELETE"].includes(req.method)) {
-    const isReuseEndpoint = req.path === "/api/reuse"
-      || (req.method === "DELETE" && req.path === "/api/reuse/inbox");
-    if (!isReuseEndpoint) {
+    const isExempt = req.path.startsWith("/api/reuse")
+      || req.path.startsWith("/api/beam");
+    if (!isExempt) {
       const cookie = req.cookies?.csrf_token;
       const header = req.headers["x-csrf-token"];
       if (!cookie || cookie !== header) {
@@ -113,6 +113,7 @@ function maskValue(val: string): string {
 
 export interface WebUIDeps {
   workspace?: Workspace;
+  parkedSessions?: import("../core/session/parked.js").ParkedSessionStore;
 }
 
 export function startWebUI(port: number, deps?: WebUIDeps): Server {
@@ -359,6 +360,47 @@ export function startWebUI(port: number, deps?: WebUIDeps): Server {
     }
 
     res.json({ ok: true });
+  });
+
+  // ─── beam-flow session bridging ─────────────────────────────────────────
+  app.post("/api/beam/park", (req, res) => {
+    const store = deps?.parkedSessions;
+    if (!store) {
+      res.status(503).json({ error: "Parked session store not available" });
+      return;
+    }
+    const { name, cliSessionId } = req.body;
+    if (!name || typeof name !== "string") {
+      res.status(400).json({ error: "name required" });
+      return;
+    }
+    if (!cliSessionId || typeof cliSessionId !== "string") {
+      res.status(400).json({ error: "cliSessionId required" });
+      return;
+    }
+    store.park({ name, cliSessionId, parkedAt: Date.now() });
+    store.saveToDisk();
+    res.json({ ok: true, name, cliSessionId });
+  });
+
+  app.get("/api/beam/sessions", (_req, res) => {
+    const store = deps?.parkedSessions;
+    if (!store) {
+      res.status(503).json({ error: "Parked session store not available" });
+      return;
+    }
+    res.json(store.list());
+  });
+
+  app.delete("/api/beam/sessions/:name", (req, res) => {
+    const store = deps?.parkedSessions;
+    if (!store) {
+      res.status(503).json({ error: "Parked session store not available" });
+      return;
+    }
+    const removed = store.remove(req.params.name);
+    if (removed) store.saveToDisk();
+    res.json({ ok: removed });
   });
 
   const server = app.listen(port, "127.0.0.1", () => {
