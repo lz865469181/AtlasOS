@@ -239,6 +239,37 @@ export class Engine {
     }
   }
 
+  async resumeSession(
+    cliSessionId: string,
+    replyCtx: ReplyContext,
+  ): Promise<void> {
+    const sessionKey = `${this.project}:${replyCtx.userID}`;
+
+    // Close existing session if any
+    const existing = this.states.get(sessionKey);
+    if (existing) {
+      await existing.agentSession.close().catch(() => {});
+    }
+
+    // Start new session with the parked session's CLI ID
+    const agentSession = await this.agent.startSession({
+      workDir: process.cwd(),
+      sessionId: cliSessionId,
+    });
+
+    const state: InteractiveState = {
+      sessionKey,
+      agentSession,
+      replyCtx,
+      pendingMessages: [],
+      approveAll: false,
+      quiet: false,
+      lastActivity: Date.now(),
+    };
+    this.states.set(sessionKey, state);
+    log("info", "Resumed parked session", { sessionKey, cliSessionId });
+  }
+
   private resolvePermission(state: InteractiveState, text: string): void {
     if (!state.pending || state.pending.resolved) return;
 

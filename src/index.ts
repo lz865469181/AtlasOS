@@ -63,7 +63,13 @@ async function main(): Promise<void> {
   // Register builtin commands
   engine.commands.register(createSessionsCommand(engine.parkedSessions));
   engine.commands.register(createResumeCommand(engine.parkedSessions, async (cliSessionId, ctx) => {
-    log("info", "Resumed parked session", { cliSessionId, userID: ctx.userID });
+    await engine.resumeSession(cliSessionId, {
+      platform: ctx.platform,
+      chatID: ctx.chatID,
+      chatType: ctx.chatType as "p2p" | "group",
+      userID: ctx.userID,
+      messageID: `resume-${Date.now()}`,
+    });
   }));
 
   // ─── Rate Limiting & ACL ─────────────────────────────────────────────
