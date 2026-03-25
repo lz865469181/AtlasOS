@@ -249,6 +249,91 @@ You can pre-populate `CLAUDE.md` with project-specific instructions.
 - **Multiple backends**: Different team members can use `/model codex` or `/model gemini` to switch
 - **Cron tasks**: Schedule recurring prompts (e.g., daily standup summaries) via `config.json`
 
+## beam-flow: Park & Resume Sessions from Feishu
+
+Start a Claude CLI session locally, "park" it, then list and resume it from Feishu — so you can switch from your terminal to mobile/desktop Feishu without losing context.
+
+### Quick Example
+
+```
+PowerShell:
+> npm run beam start fix-the-damn-bug
+  Starting Claude session 'fix-the-damn-bug' (id: a1b2c3...)
+  [normal interactive Claude CLI]
+  > /exit
+  Park now? [Y/n] y
+  Parked 'fix-the-damn-bug'! In Feishu, type: /sessions
+
+Feishu:
+> /sessions
+  Parked Sessions
+  1. fix-the-damn-bug (2m ago)
+  To resume: /resume <name>
+
+> /resume fix-the-damn-bug
+  Resumed session 'fix-the-damn-bug'! Claude remembers your conversation.
+  Send a message to continue.
+```
+
+### CLI Commands
+
+| Command | Description |
+|---------|-------------|
+| `npm run beam start <name>` | Start Claude CLI with session tracking. Sets `BEAM_SESSION_ID` and `BEAM_SESSION_NAME` env vars. On exit, offers to auto-park. |
+| `npm run beam park [name]` | Park the current session (reads env vars from `start`). Registers it with the server for Feishu access. |
+| `npm run beam sessions` | List all parked sessions (alias: `ls`). |
+| `npm run beam drop <name>` | Remove a parked session (alias: `rm`). |
+
+### Feishu Slash Commands
+
+| Command | Aliases | Description |
+|---------|---------|-------------|
+| `/sessions` | `/ss` | List all parked sessions with time since parked |
+| `/resume <name>` | `/rs` | Resume a parked session — Claude picks up the full conversation history |
+
+### How It Works
+
+```
+beam-flow CLI                    feishu-ai-assistant server
+┌──────────────┐                ┌─────────────────────────┐
+│ start <name> │                │ POST /api/beam/park      │
+│  - spawn     │                │ GET  /api/beam/sessions  │
+│    claude    │  park ──HTTP──►│ DEL  /api/beam/sessions/ │
+│  - set env   │                │          │                │
+│    vars      │                │   ParkedSessionStore      │
+└──────────────┘                │   (parked.json)           │
+                                │          │                │
+                                │   Engine.resumeSession()  │
+                                │   /sessions → list        │
+                                │   /resume   → startSession│
+                                │              (--session-id)│
+                                └─────────────────────────┘
+```
+
+1. `beam-flow start` spawns `claude --session-id <uuid>` and binds the UUID to your shell via env vars
+2. `beam-flow park` reads env vars and POSTs to the server's `/api/beam/park` endpoint
+3. In Feishu, `/sessions` lists parked sessions; `/resume` calls `Engine.resumeSession()` which starts a new agent session using the same Claude CLI session UUID
+4. Claude CLI's built-in session persistence means the full conversation history is available
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BEAM_SERVER_URL` | `http://127.0.0.1:18791` | Server URL for beam-flow API calls |
+| `CLAUDE_CLI_PATH` | `claude` | Path to the Claude CLI executable |
+| `BEAM_SESSION_ID` | *(set by start)* | Auto-set by `beam-flow start`, used by `park` |
+| `BEAM_SESSION_NAME` | *(set by start)* | Auto-set by `beam-flow start`, used by `park` |
+
+### REST API
+
+These endpoints are CSRF-exempted and localhost-only:
+
+| Method | Endpoint | Body | Response |
+|--------|----------|------|----------|
+| `POST` | `/api/beam/park` | `{ name, cliSessionId }` | `{ ok: true }` |
+| `GET` | `/api/beam/sessions` | — | `ParkedSession[]` |
+| `DELETE` | `/api/beam/sessions/:name` | — | `{ ok: removed }` |
+
 ## Multi-Platform Support
 
 Enable additional platforms in `config.json`:
