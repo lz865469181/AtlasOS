@@ -59,7 +59,7 @@ export function createResumeCommand(store: ParkedSessionStore, resumeFn: ResumeF
         });
         store.remove(name);
         store.saveToDisk();
-        await ctx.reply(`Resumed session '${name}'! Claude remembers your conversation.`);
+        await ctx.reply(`Resumed session '${name}'! Claude remembers your conversation. Send a message to continue.`);
       } catch (err) {
         await ctx.reply(`Failed to resume '${name}': ${err}`);
       }

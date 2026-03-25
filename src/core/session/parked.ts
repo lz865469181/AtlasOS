@@ -43,7 +43,7 @@ export class ParkedSessionStore {
       }
     } catch (err: any) {
       if (err.code !== "ENOENT") {
-        // Silently ignore parse errors on corrupt files
+        console.error(`[ParkedSessionStore] Failed to load ${this.persistPath}: ${err.message}`);
       }
     }
   }

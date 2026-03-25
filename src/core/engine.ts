@@ -41,21 +41,20 @@ export class Engine {
     this.project = config.project;
     this.agent = agent;
     this.config = config;
-    this.sessions = new SessionManager(config.sessionTtlMs);
+    this.sessions = new SessionManager(config.sessionTtlMs, config.persistPath);
     this.queue = new SessionQueue();
     this.commands = new CommandRegistry();
     this.dedup = new MessageDedup();
+
+    if (config.persistPath) {
+      this.sessions.loadFromDisk();
+    }
 
     const parkedPath = config.persistPath
       ? config.persistPath.replace(/sessions\.json$/, "parked.json")
       : undefined;
     this.parkedSessions = new ParkedSessionStore(parkedPath);
     this.parkedSessions.loadFromDisk();
-
-    if (config.persistPath) {
-      this.sessions = new SessionManager(config.sessionTtlMs, config.persistPath);
-      this.sessions.loadFromDisk();
-    }
   }
 
   addPlatform(platform: PlatformAdapter): void {
