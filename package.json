@@ -4,11 +4,15 @@
   "description": "AI assistant for Feishu/Lark powered by Claude CLI",
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "beam-flow": "dist/cli/beam-flow.js"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "vitest run",
+    "beam": "tsx src/cli/beam-flow.ts",
     "test:watch": "vitest"
   },
   "dependencies": {
