@@ -14,6 +14,7 @@
     "test": "vitest run",
     "beam": "tsx src/cli/beam-flow.ts",
     "build:cli": "node scripts/build-cli.mjs",
+    "build:bin": "node scripts/build-cli.mjs --bin",
     "test:watch": "vitest"
   },
   "dependencies": {
