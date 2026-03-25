@@ -1,4 +1,12 @@
-import { AVAILABLE_MODELS } from "../../session/session.js";
+import type { Card, CardButton, CardElement, CardHeaderColor } from "../types.js";
+
+// Model labels — previously imported from session/session.ts which is now deleted.
+// In the new architecture, models are managed by agents via ModelSwitcher interface.
+const AVAILABLE_MODELS: Record<string, string> = {
+  "claude-sonnet-4-20250514": "Claude Sonnet 4",
+  "claude-haiku-4-20250414": "Claude Haiku 4",
+  "claude-opus-4-20250514": "Claude Opus 4",
+};
 
 /** Permission types the bot may need to request from a user. */
 export type PermissionType = "doc" | "wiki" | "app" | "custom";
@@ -176,4 +184,73 @@ export function modelSelectionCard(currentModel: string): string {
   };
 
   return JSON.stringify(card);
+}
+
+/**
+ * Convert a platform-agnostic Card into Feishu Interactive Card JSON.
+ * This bridges the platform-agnostic Card model to Feishu's card format.
+ */
+export function renderCardAsFeishuJSON(agnosticCard: Card): string {
+  const COLOR_MAP: Record<string, string> = {
+    blue: "blue", green: "green", orange: "orange",
+    red: "red", purple: "purple", grey: "grey",
+  };
+
+  const elements: unknown[] = [];
+
+  for (const el of agnosticCard.elements) {
+    switch (el.type) {
+      case "markdown":
+        elements.push({ tag: "markdown", content: el.content });
+        break;
+      case "divider":
+        elements.push({ tag: "hr" });
+        break;
+      case "actions":
+        elements.push({
+          tag: "action",
+          actions: el.buttons.map((b) => ({
+            tag: "button",
+            text: { tag: "plain_text", content: b.text },
+            type: b.type === "danger" ? "danger" : b.type === "primary" ? "primary" : "default",
+            value: { action: b.value, ...(b.extra ?? {}) },
+          })),
+        });
+        break;
+      case "note":
+        elements.push({
+          tag: "note",
+          elements: [{ tag: "plain_text", content: el.content }],
+        });
+        break;
+      case "list_item": {
+        const extra = el.button ? {
+          tag: "button",
+          text: { tag: "plain_text", content: el.button.text },
+          type: el.button.type === "danger" ? "danger" : el.button.type === "primary" ? "primary" : "default",
+          value: { action: el.button.value, ...(el.button.extra ?? {}) },
+        } : undefined;
+        elements.push({
+          tag: "div",
+          text: { tag: "lark_md", content: el.text },
+          ...(extra ? { extra } : {}),
+        });
+        break;
+      }
+    }
+  }
+
+  const feishuCard: Record<string, unknown> = {
+    config: { wide_screen_mode: true },
+    elements,
+  };
+
+  if (agnosticCard.header) {
+    feishuCard.header = {
+      title: { tag: "plain_text", content: agnosticCard.header.title },
+      template: COLOR_MAP[agnosticCard.header.color ?? "blue"] ?? "blue",
+    };
+  }
+
+  return JSON.stringify(feishuCard);
 }

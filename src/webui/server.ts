@@ -4,14 +4,11 @@ import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
+import QRCode from "qrcode";
 import { readRawConfig, writeRawConfig, getConfigPath, getConfig } from "../config.js";
 import { subscribe, unsubscribe, getHistory, emit } from "./events.js";
 import { allAdapters, getAdapter } from "../platform/registry.js";
-import { TOOL_API_KEY_ENV } from "../tools/index.js";
-import { SearchService } from "../tools/index.js";
-import { listRecentSessions, findSessionFile, extractSessionMeta } from "../claude/sessions.js";
-import type { SessionManager } from "../session/manager.js";
-import type { Workspace } from "../workspace/workspace.js";
+import type { Workspace } from "../core/workspace/workspace.js";
 import type { Server } from "node:http";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -73,6 +70,26 @@ function randomHex(bytes: number): string {
   return randomBytes(bytes).toString("hex");
 }
 
+// --- Feishu deep link helpers ---
+
+function getBotChatUrl(): string | null {
+  try {
+    const cfg = getConfig();
+    const appId = cfg.channels.feishu?.app_id;
+    if (!appId) return null;
+    return `https://applink.feishu.cn/client/bot_chat?appId=${appId}`;
+  } catch {
+    return null;
+  }
+}
+
+async function generateQR(url: string, format: "terminal" | "svg" = "terminal"): Promise<string> {
+  if (format === "svg") {
+    return QRCode.toString(url, { type: "svg" });
+  }
+  return QRCode.toString(url, { type: "terminal", small: true });
+}
+
 // --- Secrets helpers ---
 
 function getSecretKeys(): string[] {
@@ -95,7 +112,6 @@ function maskValue(val: string): string {
 // --- Server ---
 
 export interface WebUIDeps {
-  sessionManager?: SessionManager;
   workspace?: Workspace;
 }
 
@@ -254,222 +270,30 @@ export function startWebUI(port: number, deps?: WebUIDeps): Server {
     }, 500);
   });
 
-  // --- Tools API keys ---
+  // Tools API endpoints removed — tool registry moved to agent layer
 
-  app.get("/api/tools/keys", (_req, res) => {
-    const keys = Object.entries(TOOL_API_KEY_ENV).map(([id, envVar]) => ({
-      id,
-      env_var: envVar,
-      is_set: !!process.env[envVar],
-      masked: process.env[envVar] ? maskValue(process.env[envVar]!) : "",
-    }));
-    res.json(keys);
-  });
+  // CLI-to-Feishu reuse endpoints (POST /api/reuse, GET /api/reuse/status)
+  // removed — session manager moved to Engine layer.
 
-  app.post("/api/tools/keys", (req, res) => {
-    const { env_var, value } = req.body;
-    if (!env_var || typeof env_var !== "string") {
-      res.status(400).json({ error: "env_var required" });
+  // GET /api/reuse/qr — Standalone QR code for Feishu bot deep link
+  app.get("/api/reuse/qr", async (req, res) => {
+    const botUrl = getBotChatUrl();
+    if (!botUrl) {
+      res.status(404).json({ error: "Feishu app_id not configured" });
       return;
     }
-    // Validate it's a known tool env var
-    const validKeys = Object.values(TOOL_API_KEY_ENV);
-    if (!validKeys.includes(env_var)) {
-      res.status(400).json({ error: `Unknown tool env var: ${env_var}` });
-      return;
-    }
-    if (!value || typeof value !== "string") {
-      res.status(400).json({ error: "value required" });
-      return;
-    }
-    process.env[env_var] = value;
-    log("info", "Tool API key set via WebUI", { env_var });
-    res.json({ ok: true });
-  });
 
-  app.delete("/api/tools/keys", (req, res) => {
-    const { env_var } = req.body;
-    if (!env_var) {
-      res.status(400).json({ error: "env_var required" });
-      return;
-    }
-    delete process.env[env_var];
-    log("info", "Tool API key removed via WebUI", { env_var });
-    res.json({ ok: true });
-  });
-
-  app.get("/api/tools/status", (_req, res) => {
-    const service = new SearchService();
-    res.json(service.getProviderStatus());
-  });
-
-  // --- /api/reuse: CLI-to-Feishu session bridging ---
-  // Allows a local CLI session to push its current output to Feishu and
-  // attach the Feishu bot to the same CLI session for continued conversation.
-  //
-  // POST /api/reuse
-  // Body: {
-  //   sessionId?: string,   // CLI session UUID (auto-detects latest if omitted)
-  //   message?: string,     // Message to send to Feishu (e.g. current CLI output)
-  //   userID?: string,      // Feishu open_id (uses first active session user if omitted)
-  //   chatID?: string,      // Feishu chat_id (uses user's last active chat if omitted)
-  // }
-  app.post("/api/reuse", async (req, res) => {
+    const format = req.query.format === "svg" ? "svg" : "terminal" as const;
     try {
-      const { sessionId, message, userID, chatID } = req.body ?? {};
-      const sessionManager = deps?.sessionManager;
-      const workspace = deps?.workspace;
-
-      if (!sessionManager || !workspace) {
-        res.status(503).json({ error: "Session manager not available" });
-        return;
-      }
-
-      // 1. Resolve the CLI session to attach
-      const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-      let resolvedSessionId: string;
-      let meta: { cwd: string; gitBranch?: string; entrypoint?: string };
-
-      if (sessionId) {
-        if (!UUID_RE.test(sessionId)) {
-          res.status(400).json({ error: "Invalid session ID format. Expected a UUID." });
-          return;
-        }
-        const found = findSessionFile(sessionId);
-        if (!found) {
-          res.status(404).json({ error: `Session ${sessionId} not found` });
-          return;
-        }
-        resolvedSessionId = sessionId;
-        const extracted = extractSessionMeta(found);
-        if (!extracted) {
-          res.status(400).json({ error: "Failed to read session metadata" });
-          return;
-        }
-        meta = extracted;
+      const qrCode = await generateQR(botUrl, format);
+      if (format === "svg") {
+        res.type("image/svg+xml").send(qrCode);
       } else {
-        // Auto-detect latest CLI session
-        const recent = listRecentSessions(1);
-        if (recent.length === 0) {
-          res.status(404).json({ error: "No local CLI sessions found" });
-          return;
-        }
-        const latest = recent[0]!;
-        resolvedSessionId = latest.sessionId;
-        meta = { cwd: latest.cwd, gitBranch: latest.gitBranch, entrypoint: latest.entrypoint };
+        res.type("text/plain").send(qrCode);
       }
-
-      // 2. Get the Feishu adapter and sender
-      const feishuAdapter = getAdapter("feishu");
-      if (!feishuAdapter) {
-        res.status(503).json({ error: "Feishu adapter not available" });
-        return;
-      }
-      const sender = feishuAdapter.getSender();
-
-      // 3. Find or create the target session
-      const agentID = workspace.agentID;
-      let resolvedUserID = userID;
-      let resolvedChatID = chatID;
-
-      // If no userID specified, try to find the most recently active feishu session
-      if (!resolvedUserID) {
-        resolvedUserID = sessionManager.findMostRecentUserID();
-      }
-
-      if (!resolvedUserID) {
-        res.status(400).json({ error: "No userID provided and no active Feishu sessions found. Please specify userID." });
-        return;
-      }
-
-      // Resolve chatID: prefer explicit > session's lastChatID > error
-      if (!resolvedChatID) {
-        resolvedChatID = sessionManager.findLastChatID(agentID, resolvedUserID);
-      }
-      if (!resolvedChatID) {
-        res.status(400).json({
-          error: "No chatID provided and no recent chat found for this user. "
-            + "The user must send at least one message to the bot first, or provide chatID explicitly.",
-        });
-        return;
-      }
-
-      // Attach the CLI session to the feishu bot session
-      const session = sessionManager.getOrCreate(agentID, resolvedUserID);
-      session.attachExternalSession(resolvedSessionId, meta.cwd);
-      sessionManager.scheduleSave();
-
-      log("info", "CLI session reused via API", {
-        sessionId: resolvedSessionId,
-        userID: resolvedUserID,
-        chatID: resolvedChatID,
-        cwd: meta.cwd,
-      });
-      emit("command", { command: "/reuse", source: "api", userID: resolvedUserID, sessionId: resolvedSessionId });
-
-      // 4. Send notification + message to Feishu
-      const branch = meta.gitBranch ? `\nBranch: \`${meta.gitBranch}\`` : "";
-      const attachInfo = [
-        `**Session Reused (from CLI)**`,
-        ``,
-        `Session: \`${resolvedSessionId}\``,
-        `Project: \`${meta.cwd}\`${branch}`,
-        ``,
-        `Your Feishu chat is now attached to this CLI session. Send messages here to continue the conversation.`,
-        `Use \`/detach\` to return to normal.`,
-      ].join("\n");
-
-      await sender.sendMarkdown(resolvedChatID, attachInfo);
-
-      // Send the CLI output as a message if provided (truncate to 30KB)
-      if (message && typeof message === "string" && message.trim()) {
-        const MAX_MSG_LEN = 30_000;
-        const truncated = message.trim().slice(0, MAX_MSG_LEN);
-        const suffix = message.trim().length > MAX_MSG_LEN ? "\n\n_...truncated_" : "";
-        await sender.sendMarkdown(resolvedChatID, `**CLI Output:**\n\n${truncated}${suffix}`);
-      }
-
-      res.json({
-        ok: true,
-        sessionId: resolvedSessionId,
-        userID: resolvedUserID,
-        chatID: resolvedChatID,
-        cwd: meta.cwd,
-        gitBranch: meta.gitBranch,
-        inboxUrl: `/api/reuse/inbox?userID=${encodeURIComponent(resolvedUserID)}`,
-      });
     } catch (err) {
-      log("error", "Reuse API error", { error: String(err) });
       res.status(500).json({ error: String(err) });
     }
-  });
-
-  // GET /api/reuse/status — Check current reuse state for a user
-  app.get("/api/reuse/status", (req, res) => {
-    const sessionManager = deps?.sessionManager;
-    const workspace = deps?.workspace;
-    if (!sessionManager || !workspace) {
-      res.status(503).json({ error: "Session manager not available" });
-      return;
-    }
-
-    const userID = req.query.userID as string;
-    if (!userID) {
-      res.status(400).json({ error: "userID query param required" });
-      return;
-    }
-
-    const session = sessionManager.get(workspace.agentID, userID);
-    if (!session) {
-      res.json({ attached: false, message: "No active session for this user" });
-      return;
-    }
-
-    res.json({
-      attached: !!session.cliWorkDir,
-      sessionId: session.cliSessionId,
-      cliWorkDir: session.cliWorkDir ?? null,
-    });
   });
 
   // GET /api/reuse/inbox — Poll for Feishu replies written to the inbox file
