@@ -220,4 +220,52 @@ describe("Engine", () => {
     expect(platform.stop).toHaveBeenCalledOnce();
     expect(agent.stop).toHaveBeenCalledOnce();
   });
+
+  it("exposes parkedSessions store", () => {
+    const agent = createMockAgent();
+    const engine = new Engine(agent, {
+      project: "test",
+      dataDir: "/tmp/test",
+      sessionTtlMs: 3600_000,
+    });
+    expect(engine.parkedSessions).toBeDefined();
+    expect(engine.parkedSessions.list()).toEqual([]);
+  });
+
+  it("resumes a parked session with sessionId", async () => {
+    const agent = createMockAgent([{ type: "result", content: "resumed!" }]);
+    const engine = new Engine(agent, {
+      project: "test",
+      dataDir: "/tmp/test",
+      sessionTtlMs: 3600_000,
+    });
+    const sender = createMockSender();
+    const platform = createMockPlatform();
+
+    engine.parkedSessions.park({
+      name: "my-task",
+      cliSessionId: "real-claude-id-123",
+      parkedAt: Date.now(),
+    });
+
+    engine.commands.register({
+      name: "resume",
+      description: "Resume parked session",
+      handler: async (ctx) => {
+        const name = ctx.args.trim();
+        const parked = engine.parkedSessions.get(name);
+        if (!parked) {
+          await ctx.reply("not found");
+          return;
+        }
+        await ctx.reply(`Resuming '${name}'...`);
+      },
+    });
+
+    const event = createMessageEvent({ text: "/resume my-task" });
+    await engine.handleMessage(event, sender, platform);
+    const textCalls = (sender.sendText as any).mock.calls;
+    expect(textCalls.some((c: any[]) => c[1].includes("Resuming"))).toBe(true);
+    await engine.stop();
+  });
 });

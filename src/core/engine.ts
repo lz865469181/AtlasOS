@@ -13,12 +13,14 @@ import {
   isAllowResponse, isDenyResponse, isApproveAllResponse,
   sendPermissionPrompt,
 } from "./permission.js";
+import { ParkedSessionStore } from "./session/parked.js";
 import { log } from "./logger.js";
 
 export interface EngineConfig {
   project: string;
   dataDir: string;
   sessionTtlMs: number;
+  persistPath?: string;
   streamPreview?: { intervalMs?: number; minDeltaChars?: number; maxChars?: number };
 }
 
@@ -27,6 +29,7 @@ export class Engine {
   readonly agent: Agent;
   readonly platforms: PlatformAdapter[] = [];
   readonly commands: CommandRegistry;
+  readonly parkedSessions: ParkedSessionStore;
 
   private sessions: SessionManager;
   private queue: SessionQueue;
@@ -42,6 +45,17 @@ export class Engine {
     this.queue = new SessionQueue();
     this.commands = new CommandRegistry();
     this.dedup = new MessageDedup();
+
+    const parkedPath = config.persistPath
+      ? config.persistPath.replace(/sessions\.json$/, "parked.json")
+      : undefined;
+    this.parkedSessions = new ParkedSessionStore(parkedPath);
+    this.parkedSessions.loadFromDisk();
+
+    if (config.persistPath) {
+      this.sessions = new SessionManager(config.sessionTtlMs, config.persistPath);
+      this.sessions.loadFromDisk();
+    }
   }
 
   addPlatform(platform: PlatformAdapter): void {
@@ -65,6 +79,7 @@ export class Engine {
     this.dedup.dispose();
     this.sessions.dispose();
     this.queue.dispose();
+    this.parkedSessions.saveToDisk();
     log("info", "Engine stopped");
   }
 
@@ -198,6 +213,12 @@ export class Engine {
           break;
 
         case "result": {
+          if (ev.sessionId) {
+            const meta = this.sessions.get(sessionKey);
+            if (meta) {
+              meta.cliSessionId = ev.sessionId;
+            }
+          }
           const finalContent = preview.finish() || ev.content;
           if (finalContent && !state.quiet) {
             await sender.sendMarkdown(event.chatID, finalContent);
