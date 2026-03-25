@@ -268,4 +268,45 @@ describe("Engine", () => {
     expect(textCalls.some((c: any[]) => c[1].includes("Resuming"))).toBe(true);
     await engine.stop();
   });
+
+  it("full beam-flow cycle: park → list → resume", async () => {
+    const agent = createMockAgent([{ type: "result", content: "I remember!" }]);
+    const engine = new Engine(agent, {
+      project: "test",
+      dataDir: "/tmp/test",
+      sessionTtlMs: 3600_000,
+    });
+
+    // 1. Park a session
+    engine.parkedSessions.park({
+      name: "debug-issue",
+      cliSessionId: "real-session-uuid-456",
+      parkedAt: Date.now(),
+    });
+
+    // 2. List should show it
+    expect(engine.parkedSessions.list()).toHaveLength(1);
+    expect(engine.parkedSessions.get("debug-issue")?.cliSessionId).toBe("real-session-uuid-456");
+
+    // 3. Resume
+    const sender = createMockSender();
+    await engine.resumeSession("real-session-uuid-456", {
+      platform: "feishu",
+      chatID: "chat-1",
+      chatType: "p2p",
+      userID: "user-1",
+      messageID: "msg-resume",
+    });
+
+    // 4. Verify agent was called with sessionId
+    expect(agent.startSession).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "real-session-uuid-456" }),
+    );
+
+    // 5. Remove from parked
+    engine.parkedSessions.remove("debug-issue");
+    expect(engine.parkedSessions.list()).toHaveLength(0);
+
+    await engine.stop();
+  });
 });
