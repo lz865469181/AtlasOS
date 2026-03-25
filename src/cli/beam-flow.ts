@@ -2,8 +2,70 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
 
 const SERVER_URL = process.env.BEAM_SERVER_URL ?? "http://127.0.0.1:18791";
+
+// ─── Daemon (background server) ─────────────────────────────────────────────
+
+const PID_DIR = join(homedir(), ".beam-flow");
+const PID_FILE = join(PID_DIR, "server.pid");
+
+function isServerRunning(): boolean {
+  if (!existsSync(PID_FILE)) return false;
+  const pid = parseInt(readFileSync(PID_FILE, "utf-8").trim(), 10);
+  if (isNaN(pid)) return false;
+  try {
+    process.kill(pid, 0); // signal 0 = check if process exists
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function ensureDaemon(): Promise<void> {
+  if (isServerRunning()) {
+    console.log("Server already running.");
+    return;
+  }
+
+  const entry = process.env.BEAM_SERVER_ENTRY ?? join(process.cwd(), "dist", "index.js");
+  if (!existsSync(entry)) {
+    console.error(`Server entry not found: ${entry}`);
+    console.error("Run 'npm run build' first, or set BEAM_SERVER_ENTRY env var.");
+    process.exit(1);
+  }
+
+  mkdirSync(PID_DIR, { recursive: true });
+
+  const child = spawn("node", [entry], {
+    detached: true,
+    stdio: "ignore",
+    env: { ...process.env },
+  });
+  child.unref();
+
+  if (child.pid) {
+    writeFileSync(PID_FILE, String(child.pid), "utf-8");
+    console.log(`Server started (PID ${child.pid}). Waiting for readiness...`);
+  }
+
+  // Poll for readiness (up to 10s)
+  for (let i = 0; i < 20; i++) {
+    try {
+      await fetch(`${SERVER_URL}/api/status`);
+      console.log("Server ready.");
+      return;
+    } catch {
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+  console.warn("Warning: server may not be ready yet. Continuing anyway.");
+}
+
+// ─── HTTP helpers ────────────────────────────────────────────────────────────
 
 async function httpJSON(method: string, path: string, body?: unknown): Promise<any> {
   const url = `${SERVER_URL}${path}`;
@@ -20,6 +82,8 @@ async function httpJSON(method: string, path: string, body?: unknown): Promise<a
   return resp.json();
 }
 
+// ─── Shell helpers ───────────────────────────────────────────────────────────
+
 function printExport(key: string, value: string): void {
   if (process.platform === "win32") {
     console.log(`  $env:${key}="${value}"`);
@@ -27,6 +91,8 @@ function printExport(key: string, value: string): void {
     console.log(`  export ${key}="${value}"`);
   }
 }
+
+// ─── Commands ────────────────────────────────────────────────────────────────
 
 async function cmdStart(name: string): Promise<void> {
   if (!name) {
@@ -150,9 +216,48 @@ function timeAgo(ms: number): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+function printHelp(): void {
+  console.log(`beam-flow - Teleport your Claude sessions to Feishu
+
+Usage:
+  beam-flow start <name>     Start Claude CLI with session tracking
+  beam-flow park [name]      Park current session for Feishu
+  beam-flow sessions         List parked sessions
+  beam-flow drop <name>      Remove a parked session
+
+Flags:
+  -d, --daemon               Start the server in background before running
+  -h, --help                 Show this help message
+
+Environment:
+  BEAM_SERVER_URL            Server URL (default: http://127.0.0.1:18791)
+  BEAM_SERVER_ENTRY          Path to server entry (default: dist/index.js)
+  CLAUDE_CLI_PATH            Path to claude CLI (default: claude)
+`);
+}
+
 // ─── CLI Entry ──────────────────────────────────────────────────────────────
 
-const [,, cmd, ...args] = process.argv;
+const rawArgs = process.argv.slice(2);
+const flags = new Set<string>();
+const positional: string[] = [];
+
+for (const arg of rawArgs) {
+  if (arg === "-d" || arg === "--daemon") flags.add("daemon");
+  else if (arg === "-h" || arg === "--help") flags.add("help");
+  else positional.push(arg);
+}
+
+const [cmd, ...args] = positional;
+
+if (flags.has("help")) {
+  printHelp();
+  process.exit(0);
+}
+
+if (flags.has("daemon")) {
+  await ensureDaemon();
+}
 
 switch (cmd) {
   case "start":
@@ -170,17 +275,6 @@ switch (cmd) {
     await cmdDrop(args.join(" "));
     break;
   default:
-    console.log(`beam-flow - Teleport your Claude sessions to Feishu
-
-Usage:
-  beam-flow start <name>     Start Claude CLI with session tracking
-  beam-flow park [name]      Park current session for Feishu
-  beam-flow sessions         List parked sessions
-  beam-flow drop <name>      Remove a parked session
-
-Environment:
-  BEAM_SERVER_URL            Server URL (default: http://127.0.0.1:18791)
-  CLAUDE_CLI_PATH            Path to claude CLI (default: claude)
-`);
+    printHelp();
     break;
 }
