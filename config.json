@@ -65,6 +65,12 @@
     "claude_cli_path": "claude",
     "default_model": "",
     "opencode_cli_path": "opencode",
+    "codex_cli_path": "codex",
+    "codex_mode": "suggest",
+    "gemini_cli_path": "gemini",
+    "gemini_mode": "default",
+    "cursor_cli_path": "agent",
+    "cursor_mode": "default",
     "max_concurrent_per_agent": 5,
     "max_retries": 3,
     "timeout": "120s",
@@ -118,6 +124,40 @@
       "max_file_size": "50KB",
       "schedule": "0 3 * * *",
       "summarize_threshold": 20
+    }
+  },
+  "voice": {
+    "stt": {
+      "enabled": false,
+      "provider": "whisper",
+      "api_key": "${OPENAI_API_KEY}",
+      "base_url": "https://api.openai.com/v1",
+      "model": "whisper-1",
+      "language": "zh"
+    },
+    "tts": {
+      "enabled": false,
+      "provider": "edge",
+      "voice": "zh-CN-XiaoxiaoNeural",
+      "max_text_len": 2000
+    }
+  },
+  "cron": {
+    "enabled": true,
+    "data_path": ""
+  },
+  "relay": {
+    "enabled": false,
+    "timeout_ms": 30000
+  },
+  "access_control": {
+    "allow_from": [],
+    "admin_from": [],
+    "roles": [],
+    "default_role": "",
+    "rate_limit": {
+      "max_messages": 30,
+      "window": "1m"
     }
   },
   "webui": {

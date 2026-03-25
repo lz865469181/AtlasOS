@@ -14,11 +14,18 @@
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.38.0",
     "dotenv": "^16.4.7",
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "qrcode": "^1.5.4"
+  },
+  "optionalDependencies": {
+    "node-telegram-bot-api": "^0.66.0",
+    "discord.js": "^14.16.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
     "@types/node": "^22.13.0",
+    "@types/node-telegram-bot-api": "^0.64.0",
+    "@types/qrcode": "^1.5.6",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
     "vitest": "^4.1.0"

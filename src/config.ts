@@ -5,7 +5,7 @@ import { config as loadDotenv } from "dotenv";
 // Load .env before anything else
 loadDotenv();
 
-export type BackendType = "claude" | "opencode";
+export type BackendType = "claude" | "opencode" | "codex" | "cursor" | "gemini";
 
 export interface AgentConfig {
   /** Which CLI backend to use: "claude" (default) or "opencode". */
@@ -90,6 +90,56 @@ export interface McpConfig {
   config_path: string;
 }
 
+export interface RateLimitCfg {
+  max_messages: number;
+  window: string;
+}
+
+export interface UserRoleCfg {
+  name: string;
+  user_ids: string[];
+  disabled_commands?: string[];
+  rate_limit?: RateLimitCfg;
+}
+
+export interface VoiceConfig {
+  stt?: {
+    enabled: boolean;
+    provider: "whisper" | "groq";
+    api_key: string;
+    base_url?: string;
+    model?: string;
+    language?: string;
+  };
+  tts?: {
+    enabled: boolean;
+    provider: "openai" | "edge";
+    api_key?: string;
+    base_url?: string;
+    voice?: string;
+    model?: string;
+    max_text_len?: number;
+  };
+}
+
+export interface CronConfig {
+  enabled: boolean;
+  data_path?: string;
+}
+
+export interface RelayConfig {
+  enabled: boolean;
+  timeout_ms?: number;
+}
+
+export interface AccessControlConfig {
+  allow_from?: string[];
+  admin_from?: string[];
+  roles?: UserRoleCfg[];
+  default_role?: string;
+  rate_limit?: RateLimitCfg;
+}
+
 export interface AppConfig {
   agent: AgentConfig;
   channels: ChannelsConfig;
@@ -99,6 +149,10 @@ export interface AppConfig {
   memory: MemoryConfig;
   mcp?: McpConfig;
   webui: WebUIConfig;
+  voice?: VoiceConfig;
+  cron?: CronConfig;
+  relay?: RelayConfig;
+  access_control?: AccessControlConfig;
 }
 
 /**
