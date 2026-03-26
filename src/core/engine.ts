@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { projectRoot } from "../config.js";
 import type {
   Agent, AgentSession, AgentEvent, MessageEvent,
   PlatformSender, PlatformAdapter, ReplyContext,
@@ -273,7 +274,7 @@ export class Engine {
       let agentSession: AgentSession;
       try {
         agentSession = await activeAgent.startSession({
-          workDir: process.cwd(),
+          workDir: projectRoot,
           ...(savedId ? { sessionId: savedId } : { continueSession: true }),
         });
         console.log("[session] spawn", { sessionKey, sessionId: savedId || "new" });
@@ -282,7 +283,7 @@ export class Engine {
           console.error(`[session] resume-failed sessionKey=${sessionKey} sessionId=${savedId} error=${err.message}`);
           this.sessions.clearAgentSessionId(sessionKey);
           agentSession = await activeAgent.startSession({
-            workDir: process.cwd(),
+            workDir: projectRoot,
           });
           console.log(`[session] fallback-fresh sessionKey=${sessionKey}`);
           await sender.sendText(event.chatID, "Session context was too large to resume — starting fresh.");
@@ -405,7 +406,7 @@ export class Engine {
     let agentSession: AgentSession;
     try {
       agentSession = await this.agent.startSession({
-        workDir: process.cwd(),
+        workDir: projectRoot,
         sessionId: cliSessionId,
       });
       console.log("[session] spawn", { sessionKey, sessionId: cliSessionId });
@@ -413,7 +414,7 @@ export class Engine {
       console.error(`[session] resume-failed sessionKey=${sessionKey} sessionId=${cliSessionId} error=${err.message}`);
       this.sessions.clearAgentSessionId(sessionKey);
       agentSession = await this.agent.startSession({
-        workDir: process.cwd(),
+        workDir: projectRoot,
       });
       console.log(`[session] fallback-fresh sessionKey=${sessionKey}`);
     }

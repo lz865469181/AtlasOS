@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import QRCode from "qrcode";
-import { readRawConfig, writeRawConfig, getConfigPath, getConfig } from "../config.js";
+import { readRawConfig, writeRawConfig, getConfigPath, getConfig, projectRoot } from "../config.js";
 import { subscribe, unsubscribe, getHistory, emit } from "./events.js";
 import { allAdapters, getAdapter } from "../platform/registry.js";
 import type { Workspace } from "../core/workspace/workspace.js";
@@ -260,7 +260,7 @@ export function startWebUI(port: number, deps?: WebUIDeps): Server {
       }
       // Spawn detached child with same node/tsx + script
       const child = spawn(process.execPath, process.argv.slice(1), {
-        cwd: process.cwd(),
+        cwd: projectRoot,
         env: process.env,
         stdio: "inherit",
         detached: true,
