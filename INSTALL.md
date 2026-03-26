@@ -171,12 +171,33 @@ The default config works out of the box for Claude CLI backend + Feishu. Key sec
 
 ## 6. Run
 
+> **Note**: `npm` commands (`npm start`, `npm run dev`) must run inside the project directory. `node dist/index.js` can run from **any directory**.
+
 ```bash
+# ─── In the project directory ───
+
 # Development (hot-reload)
+cd /path/to/feishu-ai-assistant
 npm run dev
 
 # Production
 npm run build && npm start
+
+# ─── From any directory (no need to cd) ───
+
+# Direct node (works from anywhere)
+node /path/to/feishu-ai-assistant/dist/index.js
+
+# Windows example
+node D:\github_code\feishu-ai-assistant\dist\index.js
+
+# ─── Background service (any directory) ───
+
+# PM2 (recommended)
+pm2 start /path/to/feishu-ai-assistant/dist/index.js --name feishu-ai-assistant
+
+# PM2 with auto-restart on boot
+pm2 save && pm2 startup
 ```
 
 Expected output:
