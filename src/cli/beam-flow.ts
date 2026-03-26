@@ -3,8 +3,12 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 const SERVER_URL = process.env.BEAM_SERVER_URL ?? "http://127.0.0.1:20263";
 
@@ -31,7 +35,8 @@ async function ensureDaemon(): Promise<void> {
     return;
   }
 
-  const entry = process.env.BEAM_SERVER_ENTRY ?? join(process.cwd(), "dist", "index.js");
+  // Resolve server entry relative to this file's location (dist/cli/beam-flow.js → dist/index.js)
+  const entry = process.env.BEAM_SERVER_ENTRY ?? join(__dirname, "..", "index.js");
   if (!existsSync(entry)) {
     console.error(`Server entry not found: ${entry}`);
     console.error("Run 'npm run build' first, or set BEAM_SERVER_ENTRY env var.");
@@ -231,7 +236,6 @@ Flags:
 
 Environment:
   BEAM_SERVER_URL            Server URL (default: http://127.0.0.1:20263)
-  BEAM_SERVER_ENTRY          Path to server entry (default: dist/index.js)
   CLAUDE_CLI_PATH            Path to claude CLI (default: claude)
 `);
 }

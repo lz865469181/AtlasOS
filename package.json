@@ -13,8 +13,6 @@
     "start": "node dist/index.js",
     "test": "vitest run",
     "beam": "tsx src/cli/beam-flow.ts",
-    "build:cli": "node scripts/build-cli.mjs",
-    "build:bin": "node scripts/build-cli.mjs --bin",
     "test:watch": "vitest"
   },
   "dependencies": {
@@ -32,7 +30,6 @@
     "@types/node": "^22.13.0",
     "@types/node-telegram-bot-api": "^0.64.0",
     "@types/qrcode": "^1.5.6",
-    "esbuild": "^0.25.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
     "vitest": "^4.1.0"
