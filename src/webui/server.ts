@@ -201,6 +201,62 @@ export function startWebUI(port: number, deps?: WebUIDeps): Server {
     res.json({ ok: true });
   });
 
+  // --- Tools (AI provider status & API keys) ---
+
+  const TOOL_PROVIDERS = [
+    { provider: "Anthropic (Claude)", type: "LLM", env_var: "ANTHROPIC_API_KEY" },
+    { provider: "OpenAI", type: "LLM", env_var: "OPENAI_API_KEY" },
+    { provider: "Google AI", type: "LLM", env_var: "GOOGLE_API_KEY" },
+    { provider: "Whisper (STT)", type: "Voice", env_var: "OPENAI_API_KEY" },
+  ];
+
+  app.get("/api/tools/status", (_req, res) => {
+    const status = TOOL_PROVIDERS.map((p) => ({
+      provider: p.provider,
+      type: p.type,
+      available: !!process.env[p.env_var],
+    }));
+    res.json(status);
+  });
+
+  app.get("/api/tools/keys", (_req, res) => {
+    const seen = new Set<string>();
+    const keys = TOOL_PROVIDERS
+      .filter((p) => { if (seen.has(p.env_var)) return false; seen.add(p.env_var); return true; })
+      .map((p) => ({
+        env_var: p.env_var,
+        is_set: !!process.env[p.env_var],
+        masked: process.env[p.env_var] ? maskValue(process.env[p.env_var]!) : "",
+      }));
+    res.json(keys);
+  });
+
+  app.post("/api/tools/keys", (req, res) => {
+    const { env_var, value } = req.body;
+    const valid = TOOL_PROVIDERS.some((p) => p.env_var === env_var);
+    if (!valid || !env_var) {
+      res.status(400).json({ error: "Invalid env_var" });
+      return;
+    }
+    if (!value || typeof value !== "string") {
+      res.status(400).json({ error: "Value required" });
+      return;
+    }
+    process.env[env_var] = value;
+    res.json({ ok: true });
+  });
+
+  app.delete("/api/tools/keys", (req, res) => {
+    const { env_var } = req.body;
+    const valid = TOOL_PROVIDERS.some((p) => p.env_var === env_var);
+    if (!valid || !env_var) {
+      res.status(400).json({ error: "Invalid env_var" });
+      return;
+    }
+    delete process.env[env_var];
+    res.json({ ok: true });
+  });
+
   app.get("/api/status", (_req, res) => {
     const uptimeSeconds = Math.floor((Date.now() - startedAt) / 1000);
     res.json({
