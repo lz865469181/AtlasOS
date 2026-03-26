@@ -21,7 +21,7 @@ You already use Claude Code (or Codex, Gemini CLI, etc.) locally. Your team uses
 - **Session Queue** — Messages from the same user are serialized; different users run concurrently
 - **Rate Limiting & RBAC** — Sliding-window rate limits with admin/user/guest roles
 - **Cron Scheduler** — Schedule recurring tasks with standard cron expressions
-- **WebUI Console** — Live monitor, config editor, and secrets management at `http://127.0.0.1:18791`
+- **WebUI Console** — Live monitor, config editor, and secrets management at `http://127.0.0.1:20263`
 - **Per-User Workspace** — Each user gets `CLAUDE.md`, `MEMORY.md`, `USER.md` under `~/.atlasOS/agents/{id}/users/{uid}/`
 
 ## Architecture
@@ -117,7 +117,7 @@ You should see:
 ```
 {"level":"info","msg":"Configuration loaded"}
 {"level":"info","msg":"Workspace initialized"}
-{"level":"info","msg":"Engine started","platforms":["feishu"],"webui":"http://127.0.0.1:18791"}
+{"level":"info","msg":"Engine started","platforms":["feishu"],"webui":"http://127.0.0.1:20263"}
 ```
 
 Send a message to your bot in Feishu. It will reply with the AI's response.
@@ -319,7 +319,7 @@ beam-flow CLI                    feishu-ai-assistant server
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `BEAM_SERVER_URL` | `http://127.0.0.1:18791` | Server URL for beam-flow API calls |
+| `BEAM_SERVER_URL` | `http://127.0.0.1:20263` | Server URL for beam-flow API calls |
 | `CLAUDE_CLI_PATH` | `claude` | Path to the Claude CLI executable |
 | `BEAM_SESSION_ID` | *(set by start)* | Auto-set by `beam-flow start`, used by `park` |
 | `BEAM_SESSION_NAME` | *(set by start)* | Auto-set by `beam-flow start`, used by `park` |
@@ -411,7 +411,7 @@ All settings in `config.json`. The config supports `${ENV_VAR}` expansion from `
 | `access_control` | `admin_list`, `allow_list`, `roles`, `rate_limit` | RBAC and rate limiting |
 | `voice` | `stt` (Whisper), `tts` (Edge) | Voice message support |
 | `cron` | `tasks` | Scheduled recurring prompts |
-| `webui` | `enabled`, `port` | Web console (default: 18791) |
+| `webui` | `enabled`, `port` | Web console (default: 20263) |
 | `logging` | `level`, `format`, `output` | Structured JSON logging |
 | `mcp` | `config_path` | MCP server configuration |
 
@@ -430,9 +430,55 @@ The test suite covers:
 - **Core modules**: Engine, session queue, command registry, error classification, dedup, cron, rate limiting, permission system, card builder
 - **Platform modules**: Feishu cards, message formatting, permission request cards
 
+## Building Cross-Platform Binaries
+
+The `beam-flow` CLI can be compiled into standalone binaries for Windows, macOS, and Linux using [Bun](https://bun.sh) (>= 1.1.x).
+
+### Build Commands
+
+```bash
+# Bundle TypeScript → single JS file (no binary)
+npm run build:cli
+
+# Build all platform binaries (Windows + macOS + Linux)
+npm run build:bin
+
+# Build for current platform only
+node scripts/build-cli.mjs --bin --native
+
+# Build for a specific platform
+node scripts/build-cli.mjs --bin --target=bun-windows-x64
+node scripts/build-cli.mjs --bin --target=bun-darwin-arm64
+node scripts/build-cli.mjs --bin --target=bun-linux-x64
+```
+
+### Output Binaries
+
+All binaries are generated in `dist/cli/bin/`:
+
+| File | Platform |
+|------|----------|
+| `beam-flow-windows-x64.exe` | Windows x64 |
+| `beam-flow-macos-x64` | macOS Intel |
+| `beam-flow-macos-arm64` | macOS Apple Silicon |
+| `beam-flow-linux-x64` | Linux x64 |
+| `beam-flow-linux-arm64` | Linux ARM64 |
+
+### Available Targets
+
+| Target | Description |
+|--------|-------------|
+| `bun-windows-x64` | Windows x64 |
+| `bun-darwin-x64` | macOS Intel |
+| `bun-darwin-arm64` | macOS Apple Silicon (M1/M2/M3) |
+| `bun-linux-x64` | Linux x64 |
+| `bun-linux-arm64` | Linux ARM64 |
+
+> **Note**: Cross-compilation requires Bun >= 1.1.x and network access. Use `--native` if you only need the current platform.
+
 ## WebUI
 
-Auto-starts on port 18791. Provides:
+Auto-starts on port 20263. Provides:
 
 - **Monitor** — Live logs and message feed via Server-Sent Events (SSE)
 - **Configuration** — Visual tree editor for `config.json`

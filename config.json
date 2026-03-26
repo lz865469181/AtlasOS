@@ -162,6 +162,6 @@
   },
   "webui": {
     "enabled": true,
-    "port": 18791
+    "port": 20263
   }
 }

@@ -77,8 +77,8 @@ beam-flow CLI                    feishu-ai-assistant server
 #### `park` behavior
 
 1. Read `BEAM_SESSION_ID` and `BEAM_SESSION_NAME` from environment
-2. If not found, call `GET http://127.0.0.1:18791/api/beam/sessions` to show recent Claude sessions and let user pick interactively
-3. POST to `http://127.0.0.1:18791/api/beam/park` with:
+2. If not found, call `GET http://127.0.0.1:20263/api/beam/sessions` to show recent Claude sessions and let user pick interactively
+3. POST to `http://127.0.0.1:20263/api/beam/park` with:
    ```json
    { "name": "<name>", "cliSessionId": "<uuid>" }
    ```
@@ -86,11 +86,11 @@ beam-flow CLI                    feishu-ai-assistant server
 
 #### `sessions` behavior
 
-GET `http://127.0.0.1:18791/api/beam/sessions` and print a formatted table.
+GET `http://127.0.0.1:20263/api/beam/sessions` and print a formatted table.
 
 #### `drop` behavior
 
-DELETE `http://127.0.0.1:18791/api/beam/sessions/<name>`.
+DELETE `http://127.0.0.1:20263/api/beam/sessions/<name>`.
 
 ### 2. Server API Endpoints
 

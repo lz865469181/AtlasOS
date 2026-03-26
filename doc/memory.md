@@ -75,7 +75,7 @@ Same `config.json` as Go version. Sections: agent, channels, gateway, health, lo
 
 ## WebUI (unchanged functionality)
 
-- URL: http://127.0.0.1:18791
+- URL: http://127.0.0.1:20263
 - Tabs: Monitor (live logs + messages via SSE), Configuration (tree editor), Secrets, Status
 - Security: localhost-only, CSRF token, input validation
 - API: GET/POST /api/config, GET/POST/DELETE /api/secrets, GET /api/status, GET /api/events (SSE)

@@ -6,7 +6,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
-const SERVER_URL = process.env.BEAM_SERVER_URL ?? "http://127.0.0.1:18791";
+const SERVER_URL = process.env.BEAM_SERVER_URL ?? "http://127.0.0.1:20263";
 
 // ─── Daemon (background server) ─────────────────────────────────────────────
 
@@ -230,7 +230,7 @@ Flags:
   -h, --help                 Show this help message
 
 Environment:
-  BEAM_SERVER_URL            Server URL (default: http://127.0.0.1:18791)
+  BEAM_SERVER_URL            Server URL (default: http://127.0.0.1:20263)
   BEAM_SERVER_ENTRY          Path to server entry (default: dist/index.js)
   CLAUDE_CLI_PATH            Path to claude CLI (default: claude)
 `);
