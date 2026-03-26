@@ -1,9 +1,62 @@
-import { readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readFileSync, writeFileSync, existsSync, copyFileSync, mkdirSync } from "node:fs";
+import { resolve, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
 import { config as loadDotenv } from "dotenv";
 
-// Load .env before anything else
-loadDotenv();
+// Project root: src/config.ts compiles to dist/config.js, so root = dirname(..)
+const __filename = fileURLToPath(import.meta.url);
+const PROJECT_ROOT = resolve(dirname(__filename), "..");
+
+/** Absolute path to the project root directory. */
+export const projectRoot = PROJECT_ROOT;
+
+/** Absolute path to the ~/.atlasOS/ runtime home directory. */
+export const ATLAS_HOME = resolve(homedir(), ".atlasOS");
+
+// Ensure ~/.atlasOS/ exists
+mkdirSync(ATLAS_HOME, { recursive: true });
+
+// Bootstrap config.json → ~/.atlasOS/config.json
+const atlasConfigPath = join(ATLAS_HOME, "config.json");
+if (!existsSync(atlasConfigPath)) {
+  const templatePath = join(PROJECT_ROOT, "config.json");
+  if (existsSync(templatePath)) {
+    copyFileSync(templatePath, atlasConfigPath);
+    console.log(`[bootstrap] Copied config.json → ${atlasConfigPath}`);
+  } else {
+    // Minimal default config when no template available (e.g. global npm install)
+    const defaultConfig = {
+      agent: { backend: "claude", claude_cli_path: "claude", claude_cli_args: ["--print", "--output-format", "json"], timeout: "120s", max_retries: 3, max_concurrent_per_agent: 5, workspace_root: "" },
+      channels: { feishu: { app_id: "${FEISHU_APP_ID}", app_secret: "${FEISHU_APP_SECRET}", enabled: true, ws_endpoint: "wss://open.feishu.cn/event/ws" }, telegram: { enabled: false }, discord: { enabled: false }, dingtalk: { enabled: false } },
+      gateway: { host: "127.0.0.1", port: 18789, max_sessions: 200, session_ttl: "30m", context_compress_threshold: 0.8 },
+      health: { enabled: true, port: 18790, endpoint: "/health" },
+      logging: { level: "info", format: "json", output: "stdout" },
+      memory: { compaction: { enabled: true, schedule: "0 3 * * *", max_file_size: "50KB", expire_overridden_days: 30, summarize_threshold: 20 } },
+      webui: { enabled: true, port: 20263 },
+      cron: { enabled: true },
+      access_control: { rate_limit: { max_messages: 30, window: "1m" } },
+    };
+    writeFileSync(atlasConfigPath, JSON.stringify(defaultConfig, null, 2), "utf-8");
+    console.log(`[bootstrap] Created default config.json → ${atlasConfigPath}`);
+  }
+}
+
+// Bootstrap .env → ~/.atlasOS/.env
+const atlasEnvPath = join(ATLAS_HOME, ".env");
+if (!existsSync(atlasEnvPath)) {
+  const templateEnvPath = join(PROJECT_ROOT, ".env");
+  if (existsSync(templateEnvPath)) {
+    copyFileSync(templateEnvPath, atlasEnvPath);
+    console.log(`[bootstrap] Copied .env → ${atlasEnvPath}`);
+  } else {
+    writeFileSync(atlasEnvPath, `# Feishu AI Assistant - Environment Variables\n# Edit this file and restart the server.\n\nFEISHU_APP_ID=\nFEISHU_APP_SECRET=\n# ANTHROPIC_API_KEY=\n`, "utf-8");
+    console.log(`[bootstrap] Created .env template → ${atlasEnvPath}`);
+  }
+}
+
+// Load .env from ~/.atlasOS/
+loadDotenv({ path: atlasEnvPath });
 
 export type BackendType = "claude" | "opencode" | "codex" | "cursor" | "gemini";
 
@@ -199,7 +252,7 @@ let _config: AppConfig | null = null;
 let _configPath: string = "";
 
 export function loadConfig(configPath?: string): AppConfig {
-  _configPath = configPath ?? resolve(process.cwd(), "config.json");
+  _configPath = configPath ?? atlasConfigPath;
   const raw = readFileSync(_configPath, "utf-8");
   const parsed = JSON.parse(raw);
   _config = expandDeep(parsed) as AppConfig;

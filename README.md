@@ -74,7 +74,7 @@ npm install
 
 ### 2. Configure credentials
 
-Create `.env` in the project root:
+On first run, the app auto-creates `~/.atlasOS/.env` and `~/.atlasOS/config.json`. Edit `~/.atlasOS/.env`:
 
 ```bash
 FEISHU_APP_ID=cli_xxxxxxxxxxxx
@@ -87,7 +87,7 @@ Get Feishu credentials from [Feishu Open Platform](https://open.feishu.cn/app) >
 
 ### 3. Choose your agent backend
 
-Edit `config.json`:
+Edit `~/.atlasOS/config.json`:
 
 ```jsonc
 {
@@ -168,7 +168,7 @@ claude auth login
 
 #### Step 2: Configure the Bridge
 
-Your `config.json` should have:
+Your `~/.atlasOS/config.json` should have:
 
 ```jsonc
 {
@@ -401,7 +401,7 @@ src/
 
 ## Configuration Reference
 
-All settings in `config.json`. The config supports `${ENV_VAR}` expansion from `.env`.
+All settings in `~/.atlasOS/config.json`. The config supports `${ENV_VAR}` expansion from `~/.atlasOS/.env`.
 
 | Section | Key Settings | Description |
 |---------|-------------|-------------|
