@@ -1,5 +1,6 @@
-import { join } from "node:path";
-import { loadConfig, parseDuration } from "./config.js";
+import { join, resolve } from "node:path";
+import { writeFileSync, mkdirSync, chmodSync } from "node:fs";
+import { loadConfig, parseDuration, ATLAS_HOME, projectRoot } from "./config.js";
 import { log } from "./core/logger.js";
 import { Engine } from "./core/engine.js";
 import { Workspace, getDefaultWorkspaceRoot } from "./core/workspace/workspace.js";
@@ -250,6 +251,26 @@ async function main(): Promise<void> {
     },
     webui: config.webui.enabled ? `http://127.0.0.1:${config.webui.port}` : "disabled",
   });
+
+  // Generate beam-flow CLI wrapper in ~/.atlasOS/bin/
+  try {
+    const binDir = join(ATLAS_HOME, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const beamFlowJs = resolve(projectRoot, "dist", "cli", "beam-flow.js");
+    if (process.platform === "win32") {
+      const cmdPath = join(binDir, "beam-flow.cmd");
+      writeFileSync(cmdPath, `@echo off\r\nnode "${beamFlowJs}" %*\r\n`, "utf-8");
+      // Also create a shell script for Git Bash / WSL
+      const shPath = join(binDir, "beam-flow");
+      writeFileSync(shPath, `#!/usr/bin/env bash\nnode "${beamFlowJs}" "$@"\n`, "utf-8");
+    } else {
+      const shPath = join(binDir, "beam-flow");
+      writeFileSync(shPath, `#!/usr/bin/env bash\nnode "${beamFlowJs}" "$@"\n`, { mode: 0o755 });
+    }
+    log("info", "beam-flow CLI installed", { path: binDir, hint: `Add to PATH: ${binDir}` });
+  } catch (err) {
+    log("warn", "Failed to create beam-flow wrapper", { error: String(err) });
+  }
 
   // Graceful shutdown
   const shutdown = async () => {
