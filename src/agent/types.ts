@@ -46,6 +46,7 @@ export interface AgentSession {
 
 export interface Agent {
   readonly name: string;
+  contextWindowSize?: number;
   startSession(opts: AgentSessionOpts): Promise<AgentSession>;
   listSessions(workDir: string): Promise<SessionInfo[]>;
   stop(): Promise<void>;

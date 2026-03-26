@@ -24,6 +24,7 @@ export interface InteractiveState {
   approveAll: boolean;
   quiet: boolean;
   lastActivity: number;
+  inputTokens?: number;
 }
 
 export const MAX_QUEUED_MESSAGES = 5;

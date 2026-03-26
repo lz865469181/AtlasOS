@@ -46,8 +46,20 @@ export class SessionManager {
     this.scheduleSave();
   }
 
+  clearAgentSessionId(key: string): void {
+    const meta = this.sessions.get(key);
+    if (meta) {
+      meta.cliSessionId = undefined;
+      this.scheduleSave();
+    }
+  }
+
   get size(): number {
     return this.sessions.size;
+  }
+
+  list(): SessionMeta[] {
+    return [...this.sessions.values()];
   }
 
   findMostRecentUserID(): string | undefined {

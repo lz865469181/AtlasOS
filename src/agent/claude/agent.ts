@@ -6,6 +6,7 @@ import { log } from "../../core/logger.js";
 
 export class ClaudeAgent implements Agent, ModelSwitcher, ModeSwitcher, MemoryFileProvider, ContextCompressor {
   readonly name = "claude";
+  readonly contextWindowSize = 200_000;
   private cliPath: string;
   private model = "claude-sonnet-4-6";
   private mode = "default";

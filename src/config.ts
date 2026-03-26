@@ -140,6 +140,13 @@ export interface AccessControlConfig {
   rate_limit?: RateLimitCfg;
 }
 
+export interface ManagementConfig {
+  enabled?: boolean;
+  port?: number;
+  token?: string;
+  cors_origins?: string[];
+}
+
 export interface AppConfig {
   agent: AgentConfig;
   channels: ChannelsConfig;
@@ -153,6 +160,12 @@ export interface AppConfig {
   cron?: CronConfig;
   relay?: RelayConfig;
   access_control?: AccessControlConfig;
+  management?: ManagementConfig;
+
+  /** Workspace routing mode: "single" (default) or "multi-workspace". */
+  mode?: "single" | "multi-workspace";
+  /** Parent directory for workspaces (required when mode = "multi-workspace"). */
+  base_dir?: string;
 }
 
 /**

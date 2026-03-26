@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import type {
   Agent, AgentSession, AgentEvent, MessageEvent,
   PlatformSender, PlatformAdapter, ReplyContext,
@@ -14,7 +15,11 @@ import {
   sendPermissionPrompt,
 } from "./permission.js";
 import { ParkedSessionStore } from "./session/parked.js";
+import type { CronManager } from "./cron.js";
 import { log } from "./logger.js";
+import { WorkspaceBindingStore } from "./workspace/bindings.js";
+import { WorkspacePool } from "./workspace/pool.js";
+import { normalizeWorkspacePath } from "./session/normalize.js";
 
 export interface EngineConfig {
   project: string;
@@ -22,6 +27,13 @@ export interface EngineConfig {
   sessionTtlMs: number;
   persistPath?: string;
   streamPreview?: { intervalMs?: number; minDeltaChars?: number; maxChars?: number };
+
+  /** Multi-workspace mode: route messages to per-workspace agents. */
+  mode?: "single" | "multi-workspace";
+  /** Parent directory for workspaces (required when mode = "multi-workspace"). */
+  baseDir?: string;
+  /** Factory to create an Agent for a given workDir (required when mode = "multi-workspace"). */
+  createAgent?: (workDir: string) => Agent;
 }
 
 export class Engine {
@@ -36,11 +48,20 @@ export class Engine {
   private dedup: MessageDedup;
   private states = new Map<string, InteractiveState>();
   private config: EngineConfig;
+  private _startedAt: number = Date.now();
+  private _cronManager: CronManager | null = null;
+
+  // ─── Multi-workspace fields ─────────────────────────────────────────
+  private workspaceBindings?: WorkspaceBindingStore;
+  private workspacePool?: WorkspacePool;
+  private multiWorkspaceMode = false;
+  private _baseDir?: string;
 
   constructor(agent: Agent, config: EngineConfig) {
     this.project = config.project;
     this.agent = agent;
     this.config = config;
+    this._startedAt = Date.now();
     this.sessions = new SessionManager(config.sessionTtlMs, config.persistPath);
     this.queue = new SessionQueue();
     this.commands = new CommandRegistry();
@@ -55,7 +76,59 @@ export class Engine {
       : undefined;
     this.parkedSessions = new ParkedSessionStore(parkedPath);
     this.parkedSessions.loadFromDisk();
+
+    // ─── Multi-workspace init ───────────────────────────────────────
+    if (config.mode === "multi-workspace" && config.baseDir && config.createAgent) {
+      this.multiWorkspaceMode = true;
+      this._baseDir = normalizeWorkspacePath(config.baseDir);
+      this.workspaceBindings = new WorkspaceBindingStore(
+        join(config.dataDir, "workspace_bindings.json"),
+      );
+      this.workspacePool = new WorkspacePool({
+        createAgent: config.createAgent,
+        idleTimeoutMs: 15 * 60 * 1000,
+      });
+      log("info", "Multi-workspace mode enabled", { baseDir: this._baseDir });
+    }
   }
+
+  // ─── Public Getters (Management API) ──────────────────────────────
+
+  get sessionMgr(): SessionManager {
+    return this.sessions;
+  }
+
+  get agentName(): string {
+    return this.agent.name;
+  }
+
+  get platformNames(): string[] {
+    return this.platforms.map((p) => p.name);
+  }
+
+  get startedAt(): number {
+    return this._startedAt;
+  }
+
+  get cronManager(): CronManager | null {
+    return this._cronManager;
+  }
+
+  set cronManager(mgr: CronManager | null) {
+    this._cronManager = mgr;
+  }
+
+  /** Get workspace binding store (for /workspace commands). */
+  get bindings(): WorkspaceBindingStore | undefined { return this.workspaceBindings; }
+
+  /** Get workspace pool (for /workspace commands). */
+  get pool(): WorkspacePool | undefined { return this.workspacePool; }
+
+  /** Whether multi-workspace mode is enabled. */
+  get isMultiWorkspace(): boolean { return this.multiWorkspaceMode; }
+
+  /** Base directory for workspaces. */
+  get workspaceBaseDir(): string | undefined { return this._baseDir; }
 
   addPlatform(platform: PlatformAdapter): void {
     this.platforms.push(platform);
@@ -75,11 +148,34 @@ export class Engine {
       await p.stop().catch(() => {});
     }
     await this.agent.stop();
+    if (this.workspacePool) await this.workspacePool.stopAll();
+    if (this.workspaceBindings) this.workspaceBindings.flush();
     this.dedup.dispose();
     this.sessions.dispose();
     this.queue.dispose();
     this.parkedSessions.saveToDisk();
     log("info", "Engine stopped");
+  }
+
+  /**
+   * Resolve the correct Agent for the given message event.
+   * In single mode, returns the default agent.
+   * In multi-workspace mode, looks up workspace binding and returns the pool agent.
+   * Throws with code "NO_WORKSPACE_BOUND" if no binding found.
+   */
+  resolveAgentForMessage(event: MessageEvent): { agent: Agent; workspace?: string } {
+    if (!this.multiWorkspaceMode) return { agent: this.agent };
+
+    const channelKey = `${event.platform}:${event.chatID}`;
+    const binding = this.workspaceBindings!.get(channelKey);
+    if (!binding) {
+      const err = new Error("No workspace bound to this channel. Use `/workspace bind <name>` or `/workspace init <git-url>` to set up.");
+      (err as any).code = "NO_WORKSPACE_BOUND";
+      throw err;
+    }
+
+    const { agent, workspace } = this.workspacePool!.getOrCreate(binding.workspace);
+    return { agent, workspace };
   }
 
   async handleMessage(
@@ -99,8 +195,33 @@ export class Engine {
       messageID: event.messageID,
     };
 
+    // 2b. Multi-workspace: resolve agent early, reply with guidance if unbound
+    let resolvedAgent: Agent = this.agent;
+    let resolvedWorkspace: string | undefined;
+    if (this.multiWorkspaceMode) {
+      try {
+        const resolved = this.resolveAgentForMessage(event);
+        resolvedAgent = resolved.agent;
+        resolvedWorkspace = resolved.workspace;
+      } catch (err: any) {
+        if (err.code === "NO_WORKSPACE_BOUND") {
+          // Allow slash commands through even without a bound workspace
+          if (!event.text.startsWith("/")) {
+            await sender.sendText(event.chatID, err.message);
+            return;
+          }
+        } else {
+          throw err;
+        }
+      }
+    }
+
     // 3. Check for pending permission response
-    const sessionKey = `${this.project}:${event.userID}`;
+    const baseSessionKey = `${this.project}:${event.userID}`;
+    const sessionKey = this.multiWorkspaceMode && resolvedWorkspace
+      ? `${resolvedWorkspace}:${baseSessionKey}`
+      : baseSessionKey;
+
     const state = this.states.get(sessionKey);
     if (state?.pending && !state.pending.resolved) {
       this.resolvePermission(state, event.text);
@@ -131,7 +252,7 @@ export class Engine {
 
     // 5. Queue to per-session serial processor
     await this.queue.enqueue(sessionKey, async () => {
-      await this.processMessage(sessionKey, event, sender, replyCtx);
+      await this.processMessage(sessionKey, event, sender, replyCtx, resolvedAgent);
     });
   }
 
@@ -140,14 +261,35 @@ export class Engine {
     event: MessageEvent,
     sender: PlatformSender,
     replyCtx: ReplyContext,
+    agentOverride?: Agent,
   ): Promise<void> {
+    const activeAgent = agentOverride ?? this.agent;
+
     // Get or create interactive state
     let state = this.states.get(sessionKey);
     if (!state) {
-      const agentSession = await this.agent.startSession({
-        workDir: process.cwd(),
-        continueSession: true,
-      });
+      const meta = this.sessions.get(sessionKey);
+      const savedId = meta?.cliSessionId;
+      let agentSession: AgentSession;
+      try {
+        agentSession = await activeAgent.startSession({
+          workDir: process.cwd(),
+          ...(savedId ? { sessionId: savedId } : { continueSession: true }),
+        });
+        console.log("[session] spawn", { sessionKey, sessionId: savedId || "new" });
+      } catch (err: any) {
+        if (savedId) {
+          console.error(`[session] resume-failed sessionKey=${sessionKey} sessionId=${savedId} error=${err.message}`);
+          this.sessions.clearAgentSessionId(sessionKey);
+          agentSession = await activeAgent.startSession({
+            workDir: process.cwd(),
+          });
+          console.log(`[session] fallback-fresh sessionKey=${sessionKey}`);
+          await sender.sendText(event.chatID, "Session context was too large to resume — starting fresh.");
+        } else {
+          throw err;
+        }
+      }
       state = {
         sessionKey,
         agentSession,
@@ -218,8 +360,16 @@ export class Engine {
               meta.cliSessionId = ev.sessionId;
             }
           }
-          const finalContent = preview.finish() || ev.content;
+          if (ev.usage?.inputTokens) {
+            state.inputTokens = ev.usage.inputTokens;
+          }
+          let finalContent = preview.finish() || ev.content;
           if (finalContent && !state.quiet) {
+            if (state.inputTokens && state.inputTokens > 0) {
+              const ctxSize = activeAgent.contextWindowSize ?? 200_000;
+              const pct = Math.round((state.inputTokens / ctxSize) * 100);
+              finalContent += `\n[ctx: ${pct}%]`;
+            }
             await sender.sendMarkdown(event.chatID, finalContent);
           }
           // Drain queued messages
@@ -247,14 +397,26 @@ export class Engine {
     // Close existing session if any
     const existing = this.states.get(sessionKey);
     if (existing) {
+      console.log("[session] close", { sessionKey });
       await existing.agentSession.close().catch(() => {});
     }
 
     // Start new session with the parked session's CLI ID
-    const agentSession = await this.agent.startSession({
-      workDir: process.cwd(),
-      sessionId: cliSessionId,
-    });
+    let agentSession: AgentSession;
+    try {
+      agentSession = await this.agent.startSession({
+        workDir: process.cwd(),
+        sessionId: cliSessionId,
+      });
+      console.log("[session] spawn", { sessionKey, sessionId: cliSessionId });
+    } catch (err: any) {
+      console.error(`[session] resume-failed sessionKey=${sessionKey} sessionId=${cliSessionId} error=${err.message}`);
+      this.sessions.clearAgentSessionId(sessionKey);
+      agentSession = await this.agent.startSession({
+        workDir: process.cwd(),
+      });
+      console.log(`[session] fallback-fresh sessionKey=${sessionKey}`);
+    }
 
     const state: InteractiveState = {
       sessionKey,

@@ -19,8 +19,9 @@ import { OpenCodeAgent } from "./agent/opencode/agent.js";
 import { registerAdapter, allAdapters } from "./platform/registry.js";
 import { FeishuAdapter } from "./platform/feishu/adapter.js";
 import { startWebUI } from "./webui/server.js";
+import { ManagementServer } from "./core/management/server.js";
 import { emit } from "./webui/events.js";
-import { createSessionsCommand, createResumeCommand } from "./core/command/builtins.js";
+import { createSessionsCommand, createResumeCommand, createWorkspaceCommand } from "./core/command/builtins.js";
 
 async function main(): Promise<void> {
   // Load configuration
@@ -71,6 +72,7 @@ async function main(): Promise<void> {
       messageID: `resume-${Date.now()}`,
     });
   }));
+  engine.commands.register(createWorkspaceCommand(engine));
 
   // ─── Rate Limiting & ACL ─────────────────────────────────────────────
   let rateLimiter: RateLimiter | undefined;
@@ -105,6 +107,7 @@ async function main(): Promise<void> {
   if (config.cron?.enabled) {
     const cronPath = config.cron.data_path ?? join(workspace.agentDir, "crons.json");
     cronManager = new CronManager(cronPath);
+    engine.cronManager = cronManager;
     log("info", "Cron manager initialized");
   }
 
@@ -219,6 +222,19 @@ async function main(): Promise<void> {
     });
   }
 
+  // Start Management API
+  let managementServer: ManagementServer | null = null;
+  if (config.management?.enabled && config.management?.token) {
+    managementServer = new ManagementServer({
+      port: config.management.port ?? 9820,
+      token: config.management.token,
+      engine,
+      config,
+      corsOrigins: config.management.cors_origins,
+    });
+    managementServer.start();
+  }
+
   // Start Engine (starts all platform adapters)
   await engine.start();
 
@@ -243,6 +259,7 @@ async function main(): Promise<void> {
     roleManager.dispose();
     await engine.stop();
     if (webuiServer) webuiServer.close();
+    managementServer?.stop();
     log("info", "Shutdown complete");
     process.exit(0);
   };
