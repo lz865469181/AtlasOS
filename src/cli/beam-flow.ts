@@ -107,7 +107,7 @@ async function cmdStart(name: string): Promise<void> {
   printExport("BEAM_SESSION_NAME", name);
   console.log("");
 
-  const cliPath = process.env.CLAUDE_CLI_PATH ?? "claude";
+  const cliPath = (process.env.CLAUDE_CLI_PATH ?? "claude").replace(/^"|"$/g, "");
 
   const child = spawn(cliPath, ["--session-id", sessionId], {
     stdio: "inherit",
