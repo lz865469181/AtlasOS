@@ -17,7 +17,7 @@ You already use Claude Code (or Codex, Gemini CLI, etc.) locally. Your team uses
 - **Streaming Responses** — Real-time token streaming with configurable preview intervals
 - **Interactive Permission Cards** — Tool calls require explicit Allow / Deny approval via Feishu cards
 - **Per-User Sessions** — Isolated conversation history, workspace files, and memory per user
-- **Slash Commands** — Extensible `/model`, `/reset`, `/help` and custom prompt commands
+- **Slash Commands** — Built-in `/sessions`, `/resume`, `/workspace` with prefix matching and custom prompt commands
 - **Session Queue** — Messages from the same user are serialized; different users run concurrently
 - **Rate Limiting & RBAC** — Sliding-window rate limits with admin/user/guest roles
 - **Cron Scheduler** — Schedule recurring tasks with standard cron expressions
@@ -130,6 +130,22 @@ Send a message to your bot in Feishu. It will reply with the AI's response.
 4. **Permissions**: grant `im:message`, `im:message:readonly`, `im:message.reactions:write`
 5. **Connection method**: Event Subscriptions > choose **WebSocket** (not HTTP callback)
 6. **Publish** the app and approve it in your organization
+
+## Bot Commands (Feishu Slash Commands)
+
+Send these commands to the bot in Feishu:
+
+| Command | Aliases | Description |
+|---------|---------|-------------|
+| `/sessions` | `/ss` | List all parked CLI sessions available for resume |
+| `/resume <name>` | `/rs` | Resume a parked session — Claude picks up full conversation history |
+| `/workspace` | `/ws` | Show current workspace binding (multi-workspace mode) |
+| `/workspace bind <name>` | | Bind this chat to a workspace folder |
+| `/workspace init <git-url>` | | Clone a repo and bind as workspace |
+| `/workspace unbind` | | Remove workspace binding from this chat |
+| `/workspace list` | | List all workspace bindings |
+
+> Commands support prefix matching — e.g. `/ses` resolves to `/sessions` if unambiguous.
 
 ## Bridging Local Claude CLI Sessions to Feishu
 
@@ -246,8 +262,8 @@ You can pre-populate `CLAUDE.md` with project-specific instructions.
 
 - **Rate limits**: Configure `access_control.rate_limit` to prevent abuse (default: 30 msgs/min)
 - **Admin list**: Add trusted users to `access_control.admin_list` for unrestricted access
-- **Multiple backends**: Different team members can use `/model codex` or `/model gemini` to switch
-- **Cron tasks**: Schedule recurring prompts (e.g., daily standup summaries) via `config.json`
+- **Multiple backends**: Switch backends by changing `agent.backend` in `~/.atlasOS/config.json`
+- **Cron tasks**: Schedule recurring prompts (e.g., daily standup summaries) via `~/.atlasOS/config.json`
 
 ## beam-flow: Park & Resume Sessions from Feishu
 
@@ -283,13 +299,6 @@ Feishu:
 | `npm run beam park [name]` | Park the current session (reads env vars from `start`). Registers it with the server for Feishu access. |
 | `npm run beam sessions` | List all parked sessions (alias: `ls`). |
 | `npm run beam drop <name>` | Remove a parked session (alias: `rm`). |
-
-### Feishu Slash Commands
-
-| Command | Aliases | Description |
-|---------|---------|-------------|
-| `/sessions` | `/ss` | List all parked sessions with time since parked |
-| `/resume <name>` | `/rs` | Resume a parked session — Claude picks up the full conversation history |
 
 ### How It Works
 
