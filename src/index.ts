@@ -41,7 +41,7 @@ async function main(): Promise<void> {
     try {
       const pid = parseInt(readFileSync(pidFile, "utf-8").trim());
       process.kill(pid, "SIGTERM");
-      console.log(`Stopped feishu-ai-assistant (PID ${pid})`);
+      console.log(`Stopped atlas-assistant (PID ${pid})`);
       // Give it a moment to clean up, then remove the PID file
       await new Promise((r) => setTimeout(r, 100));
       if (existsSync(pidFile)) {
@@ -60,16 +60,16 @@ async function main(): Promise<void> {
     try {
       const pidStr = readFileSync(pidFile, "utf-8").trim();
       if (!pidStr) {
-        console.log("feishu-ai-assistant is not running");
+        console.log("atlas-assistant is not running");
         process.exit(0);
       }
       const pid = parseInt(pidStr);
       // Check if process exists by sending signal 0
       process.kill(pid, 0);
-      console.log(`feishu-ai-assistant is running (PID ${pid})`);
+      console.log(`atlas-assistant is running (PID ${pid})`);
       process.exit(0);
     } catch (err) {
-      console.log("feishu-ai-assistant is not running");
+      console.log("atlas-assistant is not running");
       process.exit(0);
     }
   }
@@ -95,9 +95,9 @@ async function main(): Promise<void> {
 
     // Write PID to file
     writeFileSync(pidFile, String(child.pid));
-    console.log(`feishu-ai-assistant started (PID ${child.pid})`);
+    console.log(`atlas-assistant started (PID ${child.pid})`);
     console.log(`Logs: ${logFile}`);
-    console.log(`Stop with: feishu-ai-assistant stop`);
+    console.log(`Stop with: atlas-assistant stop`);
 
     process.exit(0);
   }
