@@ -27,7 +27,7 @@ describe("/sessions command", () => {
     await cmd.handler(ctx);
     expect(ctx.replies.length + ctx.cards.length).toBeGreaterThan(0);
     const all = [...ctx.replies, ...ctx.cards].join(" ");
-    expect(all).toContain("No parked sessions");
+    expect(all).toContain("No sessions");
   });
 
   it("lists parked sessions", async () => {

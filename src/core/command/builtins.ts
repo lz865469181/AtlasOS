@@ -21,19 +21,22 @@ function timeAgo(ms: number): string {
 export function createSessionsCommand(store: ParkedSessionStore): CommandDef {
   return {
     name: "sessions",
-    description: "List parked CLI sessions available for resume",
+    description: "List CLI sessions (running and parked)",
     aliases: ["ss"],
     handler: async (ctx: CommandContext) => {
       const sessions = store.list();
       if (sessions.length === 0) {
-        await ctx.reply("No parked sessions. Use `beam-flow park` from your terminal to park a session.");
+        await ctx.reply("No sessions. Use `beam-flow start <name>` from your terminal to start a session.");
         return;
       }
       const lines = sessions.map((s, i) => {
-        const ago = timeAgo(Date.now() - s.parkedAt);
-        return `${i + 1}. **${s.name}** (${ago})`;
+        const icon = s.status === "running" ? "🟢" : "🅿️";
+        const label = s.status === "running" ? "Running" : "Parked";
+        const refTime = s.status === "running" ? s.startedAt : s.parkedAt;
+        const ago = timeAgo(Date.now() - refTime);
+        return `${i + 1}. ${icon} **${s.name}** — ${label} (${ago})`;
       });
-      const text = `**Parked Sessions**\n\n${lines.join("\n")}\n\nTo resume: \`/resume <name>\``;
+      const text = `**Sessions**\n\n${lines.join("\n")}\n\nTo resume a parked session: \`/resume <name>\``;
       await ctx.reply(text);
     },
   };
@@ -55,6 +58,10 @@ export function createResumeCommand(store: ParkedSessionStore, resumeFn: ResumeF
       const parked = store.get(name);
       if (!parked) {
         await ctx.reply(`Session '${name}' not found. Use \`/sessions\` to list available sessions.`);
+        return;
+      }
+      if (parked.status === "running") {
+        await ctx.reply(`Session '${name}' is still running locally. Exit the CLI first, then it will be available to resume.`);
         return;
       }
       try {
@@ -358,19 +365,22 @@ export function createStopCommand(engine: Engine): CommandDef {
 export function createListCommand(store: ParkedSessionStore): CommandDef {
   return {
     name: "list",
-    description: "List parked CLI sessions (alias for /sessions)",
+    description: "List CLI sessions (alias for /sessions)",
     aliases: ["ls"],
     handler: async (ctx: CommandContext) => {
       const sessions = store.list();
       if (sessions.length === 0) {
-        await ctx.reply("No parked sessions. Use `beam-flow park` from your terminal to park a session.");
+        await ctx.reply("No sessions. Use `beam-flow start <name>` from your terminal to start a session.");
         return;
       }
       const lines = sessions.map((s, i) => {
-        const ago = timeAgo(Date.now() - s.parkedAt);
-        return `${i + 1}. **${s.name}** (${ago})`;
+        const icon = s.status === "running" ? "🟢" : "🅿️";
+        const label = s.status === "running" ? "Running" : "Parked";
+        const refTime = s.status === "running" ? s.startedAt : s.parkedAt;
+        const ago = timeAgo(Date.now() - refTime);
+        return `${i + 1}. ${icon} **${s.name}** — ${label} (${ago})`;
       });
-      await ctx.reply(`**Parked Sessions**\n\n${lines.join("\n")}\n\nTo resume: \`/resume <name>\``);
+      await ctx.reply(`**Sessions**\n\n${lines.join("\n")}\n\nTo resume a parked session: \`/resume <name>\``);
     },
   };
 }
@@ -391,6 +401,10 @@ export function createSwitchCommand(engine: Engine): CommandDef {
       const parked = engine.parkedSessions.get(name);
       if (!parked) {
         await ctx.reply(`Session '${name}' not found. Use \`/sessions\` to list available sessions.`);
+        return;
+      }
+      if (parked.status === "running") {
+        await ctx.reply(`Session '${name}' is still running locally. Exit the CLI first.`);
         return;
       }
       // Reset current session first

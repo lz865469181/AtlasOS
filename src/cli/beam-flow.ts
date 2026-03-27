@@ -107,12 +107,25 @@ async function cmdStart(name: string): Promise<void> {
 
   const sessionId = randomUUID();
   console.log(`\nStarting Claude session '${name}' (id: ${sessionId})`);
-  console.log("\nTo set env vars in your shell after exit, run:");
-  printExport("BEAM_SESSION_ID", sessionId);
-  printExport("BEAM_SESSION_NAME", name);
+
+  // Register session as "running" on the server
+  try {
+    await httpJSON("POST", "/api/beam/register", { name, cliSessionId: sessionId });
+    console.log(`Registered as running on server.`);
+  } catch {
+    console.log("(Server not running — session will not appear in /sessions until parked)");
+  }
+
   console.log("");
 
   const cliPath = (process.env.CLAUDE_CLI_PATH ?? "claude").replace(/^"|"$/g, "");
+
+  // Cleanup on SIGINT/crash: remove "running" session from server
+  const cleanup = () => {
+    fetch(`${SERVER_URL}/api/beam/sessions/${encodeURIComponent(name)}`, { method: "DELETE" }).catch(() => {});
+  };
+  process.on("SIGINT", cleanup);
+  process.on("SIGTERM", cleanup);
 
   const child = spawn(cliPath, ["--session-id", sessionId], {
     stdio: "inherit",
@@ -127,6 +140,9 @@ async function cmdStart(name: string): Promise<void> {
     child.on("close", (c) => resolve(c ?? 0));
   });
 
+  process.removeListener("SIGINT", cleanup);
+  process.removeListener("SIGTERM", cleanup);
+
   console.log(`\nClaude exited (code ${code}).`);
   console.log(`Session '${name}' ready to park.`);
 
@@ -137,11 +153,25 @@ async function cmdStart(name: string): Promise<void> {
 
   if (!answer || answer.toLowerCase() === "y" || answer.toLowerCase() === "yes") {
     await doPark(name, sessionId);
+  } else {
+    // User declined to park — remove the "running" entry
+    try { await httpJSON("DELETE", `/api/beam/sessions/${encodeURIComponent(name)}`); } catch { /* ignore */ }
+    console.log(`Session '${name}' not parked. Use 'beam-flow park ${name}' later if needed.`);
   }
 }
 
 async function doPark(name: string, sessionId: string): Promise<void> {
   try {
+    // Try to transition existing "running" session to "parked"
+    const result = await httpJSON("PATCH", `/api/beam/sessions/${encodeURIComponent(name)}`, { status: "parked" });
+    if (result.ok) {
+      console.log(`\nParked '${name}'! In Feishu, type: /sessions`);
+      return;
+    }
+  } catch { /* fall through to legacy POST */ }
+
+  try {
+    // Fallback: register as new parked session (server may not have the running entry)
     await httpJSON("POST", "/api/beam/park", { name, cliSessionId: sessionId });
     console.log(`\nParked '${name}'! In Feishu, type: /sessions`);
   } catch (err) {
@@ -178,13 +208,15 @@ async function cmdSessions(): Promise<void> {
   try {
     const sessions = await httpJSON("GET", "/api/beam/sessions");
     if (!sessions.length) {
-      console.log("No parked sessions.");
+      console.log("No sessions.");
       return;
     }
-    console.log("Parked sessions:\n");
+    console.log("Sessions:\n");
     for (const s of sessions) {
-      const ago = timeAgo(Date.now() - s.parkedAt);
-      console.log(`  ${s.name}  (${ago})  [${s.cliSessionId.slice(0, 8)}...]`);
+      const status = s.status === "running" ? "🟢 Running" : "🅿️  Parked";
+      const refTime = s.status === "running" ? s.startedAt : s.parkedAt;
+      const ago = timeAgo(Date.now() - refTime);
+      console.log(`  ${s.name}  ${status}  (${ago})  [${s.cliSessionId.slice(0, 8)}...]`);
     }
     console.log(`\nResume in Feishu: /resume <name>`);
   } catch (err) {

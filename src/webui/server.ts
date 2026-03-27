@@ -419,41 +419,55 @@ export function startWebUI(port: number, deps?: WebUIDeps): Server {
   });
 
   // ─── beam-flow session bridging ─────────────────────────────────────────
+
+  // Register a new session as "running" (called by beam-flow start)
+  app.post("/api/beam/register", (req, res) => {
+    const store = deps?.parkedSessions;
+    if (!store) { res.status(503).json({ error: "Session store not available" }); return; }
+    const { name, cliSessionId } = req.body;
+    if (!name || typeof name !== "string") { res.status(400).json({ error: "name required" }); return; }
+    if (!cliSessionId || typeof cliSessionId !== "string") { res.status(400).json({ error: "cliSessionId required" }); return; }
+    store.park({ name, cliSessionId, status: "running", startedAt: Date.now(), parkedAt: 0 });
+    store.saveToDisk();
+    res.json({ ok: true, name, status: "running" });
+  });
+
+  // Legacy park endpoint (creates as "parked" directly)
   app.post("/api/beam/park", (req, res) => {
     const store = deps?.parkedSessions;
-    if (!store) {
-      res.status(503).json({ error: "Parked session store not available" });
-      return;
-    }
+    if (!store) { res.status(503).json({ error: "Session store not available" }); return; }
     const { name, cliSessionId } = req.body;
-    if (!name || typeof name !== "string") {
-      res.status(400).json({ error: "name required" });
-      return;
-    }
-    if (!cliSessionId || typeof cliSessionId !== "string") {
-      res.status(400).json({ error: "cliSessionId required" });
-      return;
-    }
-    store.park({ name, cliSessionId, parkedAt: Date.now() });
+    if (!name || typeof name !== "string") { res.status(400).json({ error: "name required" }); return; }
+    if (!cliSessionId || typeof cliSessionId !== "string") { res.status(400).json({ error: "cliSessionId required" }); return; }
+    store.park({ name, cliSessionId, status: "parked", startedAt: Date.now(), parkedAt: Date.now() });
     store.saveToDisk();
     res.json({ ok: true, name, cliSessionId });
   });
 
+  // Update session status (e.g. running → parked)
+  app.patch("/api/beam/sessions/:name", (req, res) => {
+    const store = deps?.parkedSessions;
+    if (!store) { res.status(503).json({ error: "Session store not available" }); return; }
+    const { status } = req.body;
+    if (status !== "running" && status !== "parked") { res.status(400).json({ error: "Invalid status" }); return; }
+    const updated = store.updateStatus(req.params.name, status);
+    if (updated) {
+      store.saveToDisk();
+      res.json({ ok: true });
+    } else {
+      res.status(404).json({ ok: false, error: "Session not found" });
+    }
+  });
+
   app.get("/api/beam/sessions", (_req, res) => {
     const store = deps?.parkedSessions;
-    if (!store) {
-      res.status(503).json({ error: "Parked session store not available" });
-      return;
-    }
+    if (!store) { res.status(503).json({ error: "Session store not available" }); return; }
     res.json(store.list());
   });
 
   app.delete("/api/beam/sessions/:name", (req, res) => {
     const store = deps?.parkedSessions;
-    if (!store) {
-      res.status(503).json({ error: "Parked session store not available" });
-      return;
-    }
+    if (!store) { res.status(503).json({ error: "Session store not available" }); return; }
     const removed = store.remove(req.params.name);
     if (removed) store.saveToDisk();
     res.json({ ok: removed });
