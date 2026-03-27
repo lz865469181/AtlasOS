@@ -1,5 +1,6 @@
 import { join, resolve } from "node:path";
-import { writeFileSync, mkdirSync, chmodSync } from "node:fs";
+import { writeFileSync, mkdirSync, chmodSync, existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { loadConfig, parseDuration, ATLAS_HOME, projectRoot } from "./config.js";
 import { log } from "./core/logger.js";
 import { Engine } from "./core/engine.js";
@@ -284,7 +285,44 @@ async function main(): Promise<void> {
       const shPath = join(binDir, "beam-flow");
       writeFileSync(shPath, `#!/usr/bin/env bash\nnode "${beamFlowJs}" "$@"\n`, { mode: 0o755 });
     }
-    log("info", "beam-flow CLI installed", { path: binDir, hint: `Add to PATH: ${binDir}` });
+    // Auto-add ~/.atlasOS/bin to user PATH (one-time)
+    const currentPath = process.env.PATH ?? "";
+    if (!currentPath.includes(binDir)) {
+      try {
+        const { execSync } = await import("node:child_process");
+        if (process.platform === "win32") {
+          // Read current user PATH from registry (not process.env which includes system PATH)
+          let userPath = "";
+          try {
+            userPath = execSync('reg query "HKCU\\Environment" /v Path', { encoding: "utf-8" })
+              .split("REG_SZ")[1]?.trim()
+              .split("REG_EXPAND_SZ")[0]?.trim() ?? "";
+          } catch { /* no user PATH set yet */ }
+          if (!userPath.includes(binDir)) {
+            const newPath = userPath ? `${userPath};${binDir}` : binDir;
+            execSync(`setx PATH "${newPath}"`, { stdio: "ignore" });
+            log("info", "Added to user PATH (restart terminal to take effect)", { path: binDir });
+          }
+        } else {
+          // Unix: append to ~/.bashrc and ~/.zshrc if not already present
+          const { appendFileSync } = await import("node:fs");
+          const exportLine = `\nexport PATH="${binDir}:$PATH"\n`;
+          for (const rc of [".bashrc", ".zshrc"]) {
+            const rcPath = join(homedir(), rc);
+            if (existsSync(rcPath)) {
+              const content = readFileSync(rcPath, "utf-8");
+              if (!content.includes(binDir)) {
+                appendFileSync(rcPath, exportLine);
+                log("info", `Added to ~/${rc}`, { path: binDir });
+              }
+            }
+          }
+        }
+      } catch (err) {
+        log("warn", "Could not auto-add to PATH", { error: String(err), hint: `Manually add: ${binDir}` });
+      }
+    }
+    log("info", "beam-flow CLI installed", { path: binDir });
   } catch (err) {
     log("warn", "Failed to create beam-flow wrapper", { error: String(err) });
   }
