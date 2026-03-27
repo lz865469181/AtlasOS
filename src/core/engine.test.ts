@@ -9,6 +9,8 @@ function createMockSender(): PlatformSender {
     sendText: vi.fn().mockResolvedValue(undefined),
     sendMarkdown: vi.fn().mockResolvedValue(undefined),
     sendInteractiveCard: vi.fn().mockResolvedValue(undefined),
+    updateMarkdown: vi.fn().mockResolvedValue(undefined),
+    addReaction: vi.fn().mockResolvedValue(undefined),
   };
 }
 

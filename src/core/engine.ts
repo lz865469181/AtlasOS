@@ -207,6 +207,9 @@ export class Engine {
     // 1. Dedup
     if (this.dedup.isDuplicate(event.messageID)) return;
 
+    // 1b. Add typing reaction to acknowledge receipt
+    sender.addReaction(event.messageID, "TYPING").catch(() => {});
+
     // 2. Build reply context
     const replyCtx: ReplyContext = {
       platform: event.platform,
