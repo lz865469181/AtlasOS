@@ -71,13 +71,17 @@ async function main(): Promise<void> {
   // Register builtin commands
   engine.commands.register(createSessionsCommand(engine.parkedSessions));
   engine.commands.register(createResumeCommand(engine.parkedSessions, async (cliSessionId, ctx) => {
-    await engine.resumeSession(cliSessionId, {
+    const replyCtx = {
       platform: ctx.platform,
       chatID: ctx.chatID,
       chatType: ctx.chatType as "p2p" | "group",
       userID: ctx.userID,
       messageID: `resume-${Date.now()}`,
-    });
+    };
+    // Find the platform sender to enable auto-summary after resume
+    const platform = engine.platforms.find((p) => p.name === ctx.platform);
+    const sender = platform?.getSender();
+    await engine.resumeSession(cliSessionId, replyCtx, sender);
   }));
   engine.commands.register(createWorkspaceCommand(engine));
   engine.commands.register(createNewCommand(engine));

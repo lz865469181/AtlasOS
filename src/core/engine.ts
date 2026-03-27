@@ -415,6 +415,7 @@ export class Engine {
   async resumeSession(
     cliSessionId: string,
     replyCtx: ReplyContext,
+    sender?: PlatformSender,
   ): Promise<void> {
     const sessionKey = `${this.project}:${replyCtx.userID}`;
 
@@ -453,6 +454,26 @@ export class Engine {
     };
     this.states.set(sessionKey, state);
     log("info", "Resumed parked session", { sessionKey, cliSessionId });
+
+    // Auto-send a context summary request so the user sees where the conversation left off
+    if (sender) {
+      this.queue.enqueue(sessionKey, async () => {
+        try {
+          await agentSession.send("Briefly summarize what we were working on in this session (2-3 sentences). Reply in the same language as the previous conversation.");
+          let summary = "";
+          for await (const event of agentSession.events()) {
+            if (event.type === "text") summary += event.content;
+            if (event.type === "result") break;
+            if (event.type === "error") break;
+          }
+          if (summary.trim()) {
+            await sender.sendText(replyCtx.chatID, `**Session context:**\n${summary.trim()}`);
+          }
+        } catch (err) {
+          log("warn", "Failed to generate session summary", { error: String(err) });
+        }
+      });
+    }
   }
 
   private resolvePermission(state: InteractiveState, text: string): void {
