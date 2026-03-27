@@ -58,16 +58,33 @@ You already use Claude Code (or Codex, Gemini CLI, etc.) locally. Your team uses
 
 ## Quick Start
 
+### One-Click Setup (Recommended)
+
+```bash
+git clone https://github.com/lz865469181/AtlasOS.git feishu-ai-assistant
+cd feishu-ai-assistant
+
+# macOS / Linux
+bash scripts/setup.sh
+
+# Windows
+scripts\setup.cmd
+```
+
+The script installs dependencies, builds, prompts for Feishu credentials, and starts the service in background via PM2. See [INSTALL.md](./INSTALL.md) for full details.
+
 ### Prerequisites
 
 - **Node.js** >= 18
 - **One AI CLI** installed and authenticated (e.g., `claude` in PATH)
 - **Feishu Developer App** with bot capability ([create one here](https://open.feishu.cn/app))
 
-### 1. Clone and install
+### Manual Setup
+
+#### 1. Clone and install
 
 ```bash
-git clone https://github.com/user/feishu-ai-assistant.git
+git clone https://github.com/lz865469181/AtlasOS.git feishu-ai-assistant
 cd feishu-ai-assistant
 npm install
 ```

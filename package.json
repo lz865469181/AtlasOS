@@ -12,6 +12,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "vitest run",
+    "setup": "bash scripts/setup.sh",
     "beam": "tsx src/cli/beam-flow.ts",
     "test:watch": "vitest"
   },

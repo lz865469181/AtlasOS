@@ -4,54 +4,43 @@ Step-by-step guide to deploy **Feishu AI Assistant** on a new machine (Windows /
 
 All runtime configuration lives in `~/.atlasOS/`. On first run, the app auto-creates `config.json` and `.env` there.
 
-## Quick Deploy (TL;DR)
+## One-Click Setup
+
+The setup script handles everything: install, build, configure credentials, and start as a PM2 background service.
 
 ```bash
-# 1. Clone & install
-git clone https://github.com/lz865469181/AtlasOS.git feishu-ai-assistant
-cd feishu-ai-assistant
-npm install
-npm run build
-
-# 2. Install Claude CLI (if not installed)
+# 1. Install Claude CLI (if not installed)
 npm install -g @anthropic-ai/claude-code
 claude auth login
 
-# 3. First run — auto-creates ~/.atlasOS/config.json and ~/.atlasOS/.env
-npm start
-# [bootstrap] Created default config.json → ~/.atlasOS/config.json
-# [bootstrap] Created .env template → ~/.atlasOS/.env
+# 2. Clone and run setup
+git clone https://github.com/lz865469181/AtlasOS.git feishu-ai-assistant
+cd feishu-ai-assistant
 
-# 4. Edit credentials
-#    Windows:  notepad %USERPROFILE%\.atlasOS\.env
-#    macOS/Linux:  nano ~/.atlasOS/.env
-# Set FEISHU_APP_ID and FEISHU_APP_SECRET
+# macOS / Linux
+bash scripts/setup.sh
 
-# 5. Configure Feishu App (web UI):
-#    https://open.feishu.cn/app → Create Enterprise App
-#    - Add Bot capability: App Features > Bot
-#    - Subscribe events: Event Subscriptions > Add im.message.receive_v1
-#    - Grant permissions: im:message, im:message:readonly, im:message.reactions:write
-#    - Connection method: Event Subscriptions > WebSocket
-#    - Publish & approve in your organization
-
-# 6. Restart the server
-npm start
-
-# 7. Verify
-#    - Browser: http://127.0.0.1:20263 (WebUI console)
-#    - Feishu: send a message to your bot, should get AI reply
-
-# 8. beam-flow session bridging (optional)
-npm run beam start my-task       # start a Claude session locally
-# after exit, session auto-parks
-# in Feishu: /sessions → /resume my-task
-
-# 9. Run as background service (optional)
-npm install -g pm2
-pm2 start dist/index.js --name feishu-ai-assistant
-pm2 save && pm2 startup
+# Windows (CMD)
+scripts\setup.cmd
 ```
+
+The script will:
+1. Install dependencies and build
+2. Bootstrap `~/.atlasOS/config.json` and `~/.atlasOS/.env`
+3. Prompt for Feishu App ID and Secret
+4. Install PM2 and start the service in background
+
+After setup:
+```bash
+pm2 status                          # check service status
+pm2 logs feishu-ai-assistant        # view logs
+pm2 restart feishu-ai-assistant     # restart
+pm2 startup                         # auto-start on boot
+```
+
+> **Feishu App Setup**: Before running, create a Feishu app at https://open.feishu.cn/app — add Bot capability, subscribe to `im.message.receive_v1`, grant `im:message` permissions, and enable WebSocket connection mode.
+
+## Manual Deploy (Step by Step)
 
 ---
 
