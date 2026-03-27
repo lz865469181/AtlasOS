@@ -60,10 +60,7 @@ export function createResumeCommand(store: ParkedSessionStore, resumeFn: ResumeF
         await ctx.reply(`Session '${name}' not found. Use \`/sessions\` to list available sessions.`);
         return;
       }
-      if (parked.status === "running") {
-        await ctx.reply(`Session '${name}' is still running locally. Exit the CLI first, then it will be available to resume.`);
-        return;
-      }
+      const wasRunning = parked.status === "running";
       try {
         await resumeFn(parked.cliSessionId, {
           userID: ctx.userID,
@@ -73,7 +70,10 @@ export function createResumeCommand(store: ParkedSessionStore, resumeFn: ResumeF
         });
         store.remove(name);
         store.saveToDisk();
-        await ctx.reply(`Resumed session '${name}'! Claude remembers your conversation. Send a message to continue.`);
+        const msg = wasRunning
+          ? `Took over session '${name}' from local CLI. Send a message to continue.`
+          : `Resumed session '${name}'! Claude remembers your conversation. Send a message to continue.`;
+        await ctx.reply(msg);
       } catch (err) {
         await ctx.reply(`Failed to resume '${name}': ${err}`);
       }
@@ -401,10 +401,6 @@ export function createSwitchCommand(engine: Engine): CommandDef {
       const parked = engine.parkedSessions.get(name);
       if (!parked) {
         await ctx.reply(`Session '${name}' not found. Use \`/sessions\` to list available sessions.`);
-        return;
-      }
-      if (parked.status === "running") {
-        await ctx.reply(`Session '${name}' is still running locally. Exit the CLI first.`);
         return;
       }
       // Reset current session first
