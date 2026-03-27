@@ -5,11 +5,20 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
+    "feishu-ai-assistant": "dist/index.js",
     "beam-flow": "dist/cli/beam-flow.js"
+  },
+  "files": [
+    "dist/",
+    "config.json"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-static.mjs",
+    "prepare": "npm run build",
     "start": "node dist/index.js",
     "test": "vitest run",
     "setup": "bash scripts/setup.sh",

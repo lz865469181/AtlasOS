@@ -1,5 +1,6 @@
+#!/usr/bin/env node
 import { join, resolve } from "node:path";
-import { writeFileSync, mkdirSync, chmodSync, existsSync, readFileSync } from "node:fs";
+import { writeFileSync, mkdirSync, chmodSync, existsSync, readFileSync, openSync } from "node:fs";
 import { homedir } from "node:os";
 import { loadConfig, parseDuration, ATLAS_HOME, projectRoot } from "./config.js";
 import { log } from "./core/logger.js";
@@ -31,6 +32,76 @@ import {
 } from "./core/command/builtins.js";
 
 async function main(): Promise<void> {
+  // ─── Daemon Management Commands ───────────────────────────────────────
+  const command = process.argv[2];
+  const pidFile = join(ATLAS_HOME, "atlas.pid");
+
+  // Handle 'stop' command
+  if (command === "stop") {
+    try {
+      const pid = parseInt(readFileSync(pidFile, "utf-8").trim());
+      process.kill(pid, "SIGTERM");
+      console.log(`Stopped feishu-ai-assistant (PID ${pid})`);
+      // Give it a moment to clean up, then remove the PID file
+      await new Promise((r) => setTimeout(r, 100));
+      if (existsSync(pidFile)) {
+        writeFileSync(pidFile, "");
+        // Remove empty file on next startup or let it be
+      }
+    } catch (err) {
+      console.error("Failed to stop daemon:", String(err));
+      process.exit(1);
+    }
+    process.exit(0);
+  }
+
+  // Handle 'status' command
+  if (command === "status") {
+    try {
+      const pidStr = readFileSync(pidFile, "utf-8").trim();
+      if (!pidStr) {
+        console.log("feishu-ai-assistant is not running");
+        process.exit(0);
+      }
+      const pid = parseInt(pidStr);
+      // Check if process exists by sending signal 0
+      process.kill(pid, 0);
+      console.log(`feishu-ai-assistant is running (PID ${pid})`);
+      process.exit(0);
+    } catch (err) {
+      console.log("feishu-ai-assistant is not running");
+      process.exit(0);
+    }
+  }
+
+  // ─── Daemonize: re-spawn as detached process if not already a daemon ───
+  if (process.env.ATLAS_DAEMON !== "1") {
+    const { spawn } = await import("node:child_process");
+    mkdirSync(ATLAS_HOME, { recursive: true });
+
+    const logFile = join(ATLAS_HOME, "atlas.log");
+    const out = openSync(logFile, "a");
+    const err = openSync(logFile, "a");
+
+    // Re-spawn self with ATLAS_DAEMON=1 env var, detached from terminal
+    const child = spawn(process.execPath, process.argv.slice(1), {
+      detached: true,
+      stdio: ["ignore", out, err],
+      env: { ...process.env, ATLAS_DAEMON: "1" },
+    });
+
+    // Allow parent to exit independently
+    child.unref();
+
+    // Write PID to file
+    writeFileSync(pidFile, String(child.pid));
+    console.log(`feishu-ai-assistant started (PID ${child.pid})`);
+    console.log(`Logs: ${logFile}`);
+    console.log(`Stop with: feishu-ai-assistant stop`);
+
+    process.exit(0);
+  }
+
   // Load configuration
   const config = loadConfig();
   log("info", "Configuration loaded");
@@ -340,6 +411,17 @@ async function main(): Promise<void> {
     await engine.stop();
     if (webuiServer) webuiServer.close();
     managementServer?.stop();
+
+    // Clean up PID file
+    const pidFile = join(ATLAS_HOME, "atlas.pid");
+    if (existsSync(pidFile)) {
+      try {
+        writeFileSync(pidFile, "");
+      } catch (err) {
+        // Ignore errors when cleaning up
+      }
+    }
+
     log("info", "Shutdown complete");
     process.exit(0);
   };
