@@ -131,6 +131,26 @@ export class Engine {
   /** Base directory for workspaces. */
   get workspaceBaseDir(): string | undefined { return this._baseDir; }
 
+  /** Reset (close + clear) the active session for a given session key. */
+  async resetSession(sessionKey: string): Promise<void> {
+    const state = this.states.get(sessionKey);
+    if (state) {
+      await state.agentSession.close().catch(() => {});
+      this.states.delete(sessionKey);
+    }
+    this.sessions.clearAgentSessionId(sessionKey);
+  }
+
+  /** Build session key from user context (same logic as handleMessage). */
+  buildSessionKey(userID: string): string {
+    return `${this.project}:${userID}`;
+  }
+
+  /** Get live interactive state for a session key. */
+  getState(sessionKey: string): InteractiveState | undefined {
+    return this.states.get(sessionKey);
+  }
+
   addPlatform(platform: PlatformAdapter): void {
     this.platforms.push(platform);
   }

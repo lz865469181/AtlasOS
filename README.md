@@ -135,17 +135,46 @@ Send a message to your bot in Feishu. It will reply with the AI's response.
 
 Send these commands to the bot in Feishu:
 
+**Session & Conversation**
+
 | Command | Aliases | Description |
 |---------|---------|-------------|
-| `/sessions` | `/ss` | List all parked CLI sessions available for resume |
-| `/resume <name>` | `/rs` | Resume a parked session — Claude picks up full conversation history |
-| `/workspace` | `/ws` | Show current workspace binding (multi-workspace mode) |
-| `/workspace bind <name>` | | Bind this chat to a workspace folder |
+| `/new` | `/reset` | Create new session (clear current context) |
+| `/stop` | | Stop current agent execution |
+| `/compress` | `/compact` | Compress context by resetting session |
+| `/history` | | Show session history summary |
+| `/model` | `/m` | Switch AI model or list available models |
+
+**Parked Sessions (beam-flow)**
+
+| Command | Aliases | Description |
+|---------|---------|-------------|
+| `/sessions` | `/ss` | List all parked CLI sessions |
+| `/list` | `/ls` | List parked sessions (alias for /sessions) |
+| `/resume <name>` | `/rs` | Resume a parked session |
+| `/switch <name>` | `/sw` | Switch to a parked session |
+| `/delete <name>` | `/del`, `/rm` | Delete a parked session |
+
+**Workspace (multi-workspace mode)**
+
+| Command | Aliases | Description |
+|---------|---------|-------------|
+| `/workspace` | `/ws` | Show current workspace binding |
+| `/workspace bind <name>` | | Bind chat to a workspace folder |
 | `/workspace init <git-url>` | | Clone a repo and bind as workspace |
-| `/workspace unbind` | | Remove workspace binding from this chat |
+| `/workspace unbind` | | Remove workspace binding |
 | `/workspace list` | | List all workspace bindings |
 
-> Commands support prefix matching — e.g. `/ses` resolves to `/sessions` if unambiguous.
+**Utility**
+
+| Command | Aliases | Description |
+|---------|---------|-------------|
+| `/help` | `/h` | List all available commands |
+| `/status` | | Show server and session status |
+| `/whoami` | `/myid` | Show your user ID and platform info |
+| `/version` | `/ver` | Show application version |
+
+> Commands support prefix matching — e.g. `/mod` resolves to `/model` if unambiguous.
 
 ## Bridging Local Claude CLI Sessions to Feishu
 

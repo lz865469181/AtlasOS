@@ -213,6 +213,30 @@ Expected output:
 - Open `http://127.0.0.1:20263` in your browser to see the WebUI console
 - Send a message to your bot in Feishu — it should reply with Claude's response
 
+## Bot Commands (Feishu Slash Commands)
+
+Send these commands to the bot in Feishu:
+
+| Command | Aliases | Description |
+|---------|---------|-------------|
+| `/new` | `/reset` | Create new session (clear current context) |
+| `/stop` | | Stop current agent execution |
+| `/compress` | `/compact` | Compress context by resetting session |
+| `/history` | | Show session history summary |
+| `/model` | `/m` | Switch AI model or list available models |
+| `/sessions` | `/ss` | List all parked CLI sessions |
+| `/list` | `/ls` | List parked sessions (alias for /sessions) |
+| `/resume <name>` | `/rs` | Resume a parked session |
+| `/switch <name>` | `/sw` | Switch to a parked session |
+| `/delete <name>` | `/del`, `/rm` | Delete a parked session |
+| `/workspace` | `/ws` | Show current workspace binding |
+| `/help` | `/h` | List all available commands |
+| `/status` | | Show server and session status |
+| `/whoami` | `/myid` | Show your user ID and platform info |
+| `/version` | `/ver` | Show application version |
+
+> Commands support prefix matching — e.g. `/mod` resolves to `/model` if unambiguous.
+
 ## beam-flow CLI
 
 After `npm install` and `npm run build`, the `beam-flow` command is available:

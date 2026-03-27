@@ -22,7 +22,12 @@ import { FeishuAdapter } from "./platform/feishu/adapter.js";
 import { startWebUI } from "./webui/server.js";
 import { ManagementServer } from "./core/management/server.js";
 import { emit } from "./webui/events.js";
-import { createSessionsCommand, createResumeCommand, createWorkspaceCommand } from "./core/command/builtins.js";
+import {
+  createSessionsCommand, createResumeCommand, createWorkspaceCommand,
+  createNewCommand, createModelCommand, createHelpCommand, createStatusCommand,
+  createStopCommand, createListCommand, createSwitchCommand, createDeleteCommand,
+  createHistoryCommand, createCompressCommand, createWhoamiCommand, createVersionCommand,
+} from "./core/command/builtins.js";
 
 async function main(): Promise<void> {
   // Load configuration
@@ -74,6 +79,18 @@ async function main(): Promise<void> {
     });
   }));
   engine.commands.register(createWorkspaceCommand(engine));
+  engine.commands.register(createNewCommand(engine));
+  engine.commands.register(createModelCommand(engine));
+  engine.commands.register(createHelpCommand(engine));
+  engine.commands.register(createStatusCommand(engine));
+  engine.commands.register(createStopCommand(engine));
+  engine.commands.register(createListCommand(engine.parkedSessions));
+  engine.commands.register(createSwitchCommand(engine));
+  engine.commands.register(createDeleteCommand(engine.parkedSessions));
+  engine.commands.register(createHistoryCommand(engine));
+  engine.commands.register(createCompressCommand(engine));
+  engine.commands.register(createWhoamiCommand());
+  engine.commands.register(createVersionCommand());
 
   // ─── Rate Limiting & ACL ─────────────────────────────────────────────
   let rateLimiter: RateLimiter | undefined;

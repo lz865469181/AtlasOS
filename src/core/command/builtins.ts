@@ -1,9 +1,12 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { CommandDef, CommandContext } from "./registry.js";
 import type { ParkedSessionStore } from "../session/parked.js";
 import type { Engine } from "../engine.js";
+import type { Agent } from "../../agent/types.js";
+import { supportsModelSwitching } from "../../agent/types.js";
 import { normalizeWorkspacePath } from "../session/normalize.js";
+import { projectRoot } from "../../config.js";
 
 function timeAgo(ms: number): string {
   const seconds = Math.floor(ms / 1000);
@@ -210,6 +213,308 @@ export function createWorkspaceCommand(engine: Engine): CommandDef {
             `Unknown subcommand: ${sub}\nUsage: /workspace [bind|init|unbind|list]`,
           );
       }
+    },
+  };
+}
+
+// ─── /new, /reset ────────────────────────────────────────────────────────────
+
+export function createNewCommand(engine: Engine): CommandDef {
+  return {
+    name: "new",
+    description: "Create a new session (clear current context)",
+    aliases: ["reset"],
+    handler: async (ctx: CommandContext) => {
+      const key = engine.buildSessionKey(ctx.userID);
+      await engine.resetSession(key);
+      await ctx.reply("Session reset. Send a message to start a new conversation.");
+    },
+  };
+}
+
+// ─── /model ──────────────────────────────────────────────────────────────────
+
+export function createModelCommand(engine: Engine): CommandDef {
+  return {
+    name: "model",
+    description: "Switch AI model or list available models",
+    aliases: ["m"],
+    handler: async (ctx: CommandContext) => {
+      const agent = engine.agent;
+      if (!supportsModelSwitching(agent)) {
+        await ctx.reply("Model switching is not supported by the current backend.");
+        return;
+      }
+
+      const models = await agent.availableModels();
+      const current = agent.currentModel();
+
+      if (!ctx.args.trim()) {
+        // List available models
+        const lines = Object.entries(models).map(([id, label]) => {
+          const marker = id === current ? " (current)" : "";
+          return `- \`${id}\` — ${label}${marker}`;
+        });
+        await ctx.reply(`**Current model:** \`${current || "default"}\`\n\n**Available models:**\n${lines.join("\n")}\n\nUsage: \`/model <model-id>\``);
+        return;
+      }
+
+      const target = ctx.args.trim();
+      // Allow partial match
+      const match = Object.keys(models).find(
+        (id) => id === target || id.includes(target),
+      );
+
+      if (!match) {
+        await ctx.reply(`Unknown model: \`${target}\`\nAvailable: ${Object.keys(models).join(", ")}`);
+        return;
+      }
+
+      agent.setModel(match);
+      // Reset session so new model takes effect
+      const key = engine.buildSessionKey(ctx.userID);
+      await engine.resetSession(key);
+      await ctx.reply(`Model switched to \`${match}\` (${models[match]}). Session reset to apply new model.`);
+    },
+  };
+}
+
+// ─── /help ───────────────────────────────────────────────────────────────────
+
+export function createHelpCommand(engine: Engine): CommandDef {
+  return {
+    name: "help",
+    description: "List all available commands",
+    aliases: ["h"],
+    handler: async (ctx: CommandContext) => {
+      const all = engine.commands.listAll();
+      const lines = all.map((cmd) => {
+        const aliases = "aliases" in cmd && cmd.aliases?.length
+          ? ` (${cmd.aliases.map((a) => `/${a}`).join(", ")})`
+          : "";
+        return `- \`/${cmd.name}\`${aliases} — ${cmd.description}`;
+      });
+      await ctx.reply(`**Available Commands**\n\n${lines.join("\n")}`);
+    },
+  };
+}
+
+// ─── /status ─────────────────────────────────────────────────────────────────
+
+export function createStatusCommand(engine: Engine): CommandDef {
+  return {
+    name: "status",
+    description: "Show current session and server status",
+    handler: async (ctx: CommandContext) => {
+      const key = engine.buildSessionKey(ctx.userID);
+      const state = engine.getState(key);
+      const meta = engine.sessionMgr.get(key);
+      const uptimeMs = Date.now() - engine.startedAt;
+      const uptimeH = Math.floor(uptimeMs / 3_600_000);
+      const uptimeM = Math.floor((uptimeMs % 3_600_000) / 60_000);
+
+      const lines = [
+        `**Server Status**`,
+        `- Backend: \`${engine.agentName}\``,
+        `- Platforms: ${engine.platformNames.join(", ")}`,
+        `- Uptime: ${uptimeH}h ${uptimeM}m`,
+        `- Active sessions: ${engine.sessionMgr.size}`,
+        ``,
+        `**Your Session**`,
+        `- Key: \`${key}\``,
+        `- State: ${state ? "active" : "idle"}`,
+        `- Model: \`${meta?.model || "default"}\``,
+        `- Last active: ${meta ? timeAgo(Date.now() - meta.lastActiveAt) : "never"}`,
+      ];
+      if (meta?.cliSessionId) {
+        lines.push(`- CLI Session: \`${meta.cliSessionId.slice(0, 8)}...\``);
+      }
+      await ctx.reply(lines.join("\n"));
+    },
+  };
+}
+
+// ─── /stop ───────────────────────────────────────────────────────────────────
+
+export function createStopCommand(engine: Engine): CommandDef {
+  return {
+    name: "stop",
+    description: "Stop the current agent execution",
+    handler: async (ctx: CommandContext) => {
+      const key = engine.buildSessionKey(ctx.userID);
+      const state = engine.getState(key);
+      if (!state) {
+        await ctx.reply("No active session to stop.");
+        return;
+      }
+      await engine.resetSession(key);
+      await ctx.reply("Execution stopped. Send a new message to continue.");
+    },
+  };
+}
+
+// ─── /list (alias for /sessions) ─────────────────────────────────────────────
+
+export function createListCommand(store: ParkedSessionStore): CommandDef {
+  return {
+    name: "list",
+    description: "List parked CLI sessions (alias for /sessions)",
+    aliases: ["ls"],
+    handler: async (ctx: CommandContext) => {
+      const sessions = store.list();
+      if (sessions.length === 0) {
+        await ctx.reply("No parked sessions. Use `beam-flow park` from your terminal to park a session.");
+        return;
+      }
+      const lines = sessions.map((s, i) => {
+        const ago = timeAgo(Date.now() - s.parkedAt);
+        return `${i + 1}. **${s.name}** (${ago})`;
+      });
+      await ctx.reply(`**Parked Sessions**\n\n${lines.join("\n")}\n\nTo resume: \`/resume <name>\``);
+    },
+  };
+}
+
+// ─── /switch ─────────────────────────────────────────────────────────────────
+
+export function createSwitchCommand(engine: Engine): CommandDef {
+  return {
+    name: "switch",
+    description: "Switch to a parked session by name",
+    aliases: ["sw"],
+    handler: async (ctx: CommandContext) => {
+      const name = ctx.args.trim();
+      if (!name) {
+        await ctx.reply("Usage: `/switch <session-name>`\nUse `/sessions` to list available sessions.");
+        return;
+      }
+      const parked = engine.parkedSessions.get(name);
+      if (!parked) {
+        await ctx.reply(`Session '${name}' not found. Use \`/sessions\` to list available sessions.`);
+        return;
+      }
+      // Reset current session first
+      const key = engine.buildSessionKey(ctx.userID);
+      await engine.resetSession(key);
+      // Store the CLI session ID so next message resumes it
+      const meta = engine.sessionMgr.get(key);
+      if (meta) {
+        meta.cliSessionId = parked.cliSessionId;
+      }
+      engine.parkedSessions.remove(name);
+      engine.parkedSessions.saveToDisk();
+      await ctx.reply(`Switched to session '${name}'. Send a message to continue the conversation.`);
+    },
+  };
+}
+
+// ─── /delete ─────────────────────────────────────────────────────────────────
+
+export function createDeleteCommand(store: ParkedSessionStore): CommandDef {
+  return {
+    name: "delete",
+    description: "Delete a parked session",
+    aliases: ["del", "rm"],
+    handler: async (ctx: CommandContext) => {
+      const name = ctx.args.trim();
+      if (!name) {
+        await ctx.reply("Usage: `/delete <session-name>`");
+        return;
+      }
+      const removed = store.remove(name);
+      if (removed) {
+        store.saveToDisk();
+        await ctx.reply(`Deleted session '${name}'.`);
+      } else {
+        await ctx.reply(`Session '${name}' not found.`);
+      }
+    },
+  };
+}
+
+// ─── /history ────────────────────────────────────────────────────────────────
+
+export function createHistoryCommand(engine: Engine): CommandDef {
+  return {
+    name: "history",
+    description: "Show session history summary",
+    handler: async (ctx: CommandContext) => {
+      const key = engine.buildSessionKey(ctx.userID);
+      const state = engine.getState(key);
+      const meta = engine.sessionMgr.get(key);
+
+      if (!meta) {
+        await ctx.reply("No session history found.");
+        return;
+      }
+
+      const lines = [
+        `**Session History**`,
+        `- Session key: \`${key}\``,
+        `- Agent: \`${meta.agentName}\``,
+        `- Model: \`${meta.model || "default"}\``,
+        `- Last active: ${timeAgo(Date.now() - meta.lastActiveAt)}`,
+        `- Status: ${state ? "active (in conversation)" : "idle"}`,
+      ];
+      if (meta.cliSessionId) {
+        lines.push(`- CLI session: \`${meta.cliSessionId.slice(0, 8)}...\``);
+        lines.push(`\n> Full conversation history is maintained by the Claude CLI session. Send a message to continue.`);
+      }
+      await ctx.reply(lines.join("\n"));
+    },
+  };
+}
+
+// ─── /compress ───────────────────────────────────────────────────────────────
+
+export function createCompressCommand(engine: Engine): CommandDef {
+  return {
+    name: "compress",
+    description: "Compress context by resetting the session",
+    aliases: ["compact"],
+    handler: async (ctx: CommandContext) => {
+      const key = engine.buildSessionKey(ctx.userID);
+      await engine.resetSession(key);
+      await ctx.reply("Context compressed (session reset). Send a message to continue with a fresh context.");
+    },
+  };
+}
+
+// ─── /whoami ─────────────────────────────────────────────────────────────────
+
+export function createWhoamiCommand(): CommandDef {
+  return {
+    name: "whoami",
+    description: "Show your user ID and platform info",
+    aliases: ["myid"],
+    handler: async (ctx: CommandContext) => {
+      const lines = [
+        `**User Info**`,
+        `- User ID: \`${ctx.userID}\``,
+        `- Chat ID: \`${ctx.chatID}\``,
+        `- Chat type: ${ctx.chatType}`,
+        `- Platform: ${ctx.platform}`,
+      ];
+      await ctx.reply(lines.join("\n"));
+    },
+  };
+}
+
+// ─── /version ────────────────────────────────────────────────────────────────
+
+export function createVersionCommand(): CommandDef {
+  let version = "unknown";
+  try {
+    const pkg = JSON.parse(readFileSync(join(projectRoot, "package.json"), "utf-8"));
+    version = pkg.version ?? "unknown";
+  } catch { /* ignore */ }
+
+  return {
+    name: "version",
+    description: "Show application version",
+    aliases: ["ver"],
+    handler: async (ctx: CommandContext) => {
+      await ctx.reply(`**Feishu AI Assistant** v${version}`);
     },
   };
 }
