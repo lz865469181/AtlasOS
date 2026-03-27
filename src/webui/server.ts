@@ -477,6 +477,39 @@ export function startWebUI(port: number, deps?: WebUIDeps): Server {
     log("info", `WebUI server listening on http://127.0.0.1:${port}`);
   });
 
+  server.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EADDRINUSE") {
+      log("warn", `Port ${port} in use, killing old process...`);
+      try {
+        const { execSync } = require("node:child_process");
+        if (process.platform === "win32") {
+          // Find PID using the port and kill it
+          const output = execSync(`netstat -ano | findstr ":${port}"`, { encoding: "utf-8" });
+          const match = output.match(/LISTENING\s+(\d+)/);
+          if (match) {
+            execSync(`taskkill /PID ${match[1]} /F`, { stdio: "ignore" });
+            log("info", `Killed old process (PID ${match[1]}), retrying...`);
+          }
+        } else {
+          execSync(`lsof -ti:${port} | xargs kill -9 2>/dev/null || true`, { stdio: "ignore" });
+          log("info", "Killed old process, retrying...");
+        }
+        // Retry after a short delay
+        setTimeout(() => {
+          server.listen(port, "127.0.0.1", () => {
+            log("info", `WebUI server listening on http://127.0.0.1:${port}`);
+          });
+        }, 1000);
+      } catch (killErr) {
+        log("error", `Failed to free port ${port}`, { error: String(killErr) });
+        process.exit(1);
+      }
+    } else {
+      log("error", "WebUI server error", { error: String(err) });
+      process.exit(1);
+    }
+  });
+
   return server;
 }
 
