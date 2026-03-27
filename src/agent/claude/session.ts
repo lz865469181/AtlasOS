@@ -8,19 +8,48 @@ export class ClaudeSession implements AgentSession {
   private process: ChildProcess;
   private eventQueue: AgentEvent[] = [];
   private waiters: ((done: boolean) => void)[] = [];
-  private closed = false;
+  closed = false;
+
+  /** Resolves once CLI has emitted init events and is ready for stdin. */
+  private readyResolve!: () => void;
+  private readyPromise: Promise<void>;
+  private isReady = false;
+  private initTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(sessionId: string, process: ChildProcess) {
     this.sessionId = sessionId;
     this.process = process;
+    this.readyPromise = new Promise<void>((resolve) => {
+      this.readyResolve = resolve;
+    });
     this.startReading();
   }
 
+  private markReady(): void {
+    if (this.isReady) return;
+    this.isReady = true;
+    if (this.initTimer) {
+      clearTimeout(this.initTimer);
+      this.initTimer = null;
+    }
+    log("debug", "ClaudeSession ready for input", { sessionId: this.sessionId });
+    this.readyResolve();
+  }
+
   async send(prompt: string): Promise<void> {
+    if (this.closed) {
+      log("warn", "ClaudeSession.send called on closed session", { sessionId: this.sessionId });
+      return;
+    }
+    // Wait for CLI to finish initialization before writing to stdin
+    await this.readyPromise;
+    if (this.closed) return; // might have closed while waiting
+
     const msg = JSON.stringify({
       type: "user",
       content: [{ type: "text", text: prompt }],
     });
+    log("debug", "ClaudeSession.send", { sessionId: this.sessionId, promptLen: prompt.length });
     this.process.stdin?.write(msg + "\n");
   }
 
@@ -55,6 +84,7 @@ export class ClaudeSession implements AgentSession {
 
   async close(): Promise<void> {
     this.closed = true;
+    this.markReady(); // unblock any pending send()
     this.process.kill("SIGTERM");
     for (const w of this.waiters) w(true);
     this.waiters = [];
@@ -69,7 +99,23 @@ export class ClaudeSession implements AgentSession {
       for await (const line of createLineIterator(this.process.stdout)) {
         if (!line.trim()) continue;
         let obj: any;
-        try { obj = JSON.parse(line); } catch { continue; }
+        try { obj = JSON.parse(line); } catch {
+          log("debug", "ClaudeSession non-JSON line", { sessionId: this.sessionId, line: line.slice(0, 120) });
+          continue;
+        }
+
+        log("debug", "ClaudeSession raw event", { sessionId: this.sessionId, type: obj.type });
+
+        // System init events: use a debounce — after the last system event,
+        // wait 500ms of silence then mark as ready.
+        if (obj.type === "system") {
+          if (this.initTimer) clearTimeout(this.initTimer);
+          this.initTimer = setTimeout(() => this.markReady(), 500);
+          continue; // system events are not queued
+        }
+
+        // Any non-system event also means CLI is ready
+        if (!this.isReady) this.markReady();
 
         const event = this.parseEvent(obj);
         if (event) {
@@ -84,6 +130,7 @@ export class ClaudeSession implements AgentSession {
 
     // Process ended
     this.closed = true;
+    this.markReady(); // unblock any pending send()
     for (const w of this.waiters) w(true);
     this.waiters = [];
   }

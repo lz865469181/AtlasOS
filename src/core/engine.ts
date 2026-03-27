@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { execFile } from "node:child_process";
 import { projectRoot } from "../config.js";
 import type {
   Agent, AgentSession, AgentEvent, MessageEvent,
@@ -455,26 +456,41 @@ export class Engine {
     this.states.set(sessionKey, state);
     log("info", "Resumed parked session", { sessionKey, cliSessionId });
 
-    // Auto-send a context summary after a short delay to let CLI initialize
+    // Auto-summary: use a one-shot `claude -p` call (separate from the interactive session)
     if (sender) {
-      setTimeout(() => {
-        this.queue.enqueue(sessionKey, async () => {
+      const sk = sessionKey;
+      const senderRef = sender;
+      const replyRef = { ...replyCtx };
+      const summaryPrompt = "Briefly summarize what we were working on in this session (2-3 sentences). Reply in the same language as the previous conversation.";
+      log("info", "Starting auto-summary via one-shot CLI", { sessionKey: sk, cliSessionId });
+
+      // Run as a detached one-shot command — does not block the interactive session
+      const cliPath = (this.agent as any).cliPath ?? "claude";
+      execFile(cliPath, [
+        "-p", summaryPrompt,
+        "--session-id", cliSessionId,
+        "--output-format", "text",
+      ], {
+        cwd: projectRoot,
+        timeout: 120_000,
+        windowsHide: true,
+      }, async (err, stdout, stderr) => {
+        if (err) {
+          log("warn", "Auto-summary one-shot failed", { sessionKey: sk, error: err.message, stderr: stderr?.slice(0, 200) });
+          return;
+        }
+        const summary = stdout.trim();
+        if (summary) {
+          log("info", "Auto-summary generated", { sessionKey: sk, summaryLen: summary.length });
           try {
-            await agentSession.send("Briefly summarize what we were working on in this session (2-3 sentences). Reply in the same language as the previous conversation.");
-            let summary = "";
-            for await (const event of agentSession.events()) {
-              if (event.type === "text") summary += event.content;
-              if (event.type === "result") break;
-              if (event.type === "error") break;
-            }
-            if (summary.trim()) {
-              await sender.sendText(replyCtx.chatID, `**Session context:**\n${summary.trim()}`);
-            }
-          } catch (err) {
-            log("warn", "Failed to generate session summary", { error: String(err) });
+            await senderRef.sendText(replyRef.chatID, `**Session context:**\n${summary}`);
+          } catch (sendErr) {
+            log("warn", "Auto-summary send failed", { sessionKey: sk, error: String(sendErr) });
           }
-        });
-      }, 3000);
+        } else {
+          log("warn", "Auto-summary returned empty", { sessionKey: sk });
+        }
+      });
     }
   }
 
