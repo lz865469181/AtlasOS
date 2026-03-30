@@ -13,4 +13,6 @@ vendor/
 .feishu-ai-assistant.pid
 node_modules/
 dist/
+*.tsbuildinfo
 *.log
+yarn.lock

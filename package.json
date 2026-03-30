@@ -1,48 +1,14 @@
 {
-  "name": "atlas-assistant",
-  "version": "2.0.0",
-  "description": "AI assistant for Feishu/Lark powered by Claude CLI",
-  "type": "module",
-  "main": "dist/index.js",
-  "bin": {
-    "atlas-assistant": "dist/index.js",
-    "feishu-ai-assistant": "dist/index.js",
-    "beam-flow": "dist/cli/beam-flow.js"
-  },
-  "files": [
-    "dist/",
-    "config.json"
-  ],
-  "publishConfig": {
-    "access": "public"
-  },
+  "name": "atlas-ai",
+  "private": true,
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "build": "tsc && node scripts/copy-static.mjs",
-    "prepare": "npm run build",
-    "start": "node dist/index.js",
-    "test": "vitest run",
-    "setup": "bash scripts/setup.sh",
-    "beam": "tsx src/cli/beam-flow.ts",
-    "test:watch": "vitest"
+    "build": "yarn workspaces foreach -pt run build",
+    "test": "yarn workspaces foreach -pt run test",
+    "dev": "yarn workspace atlas-gateway dev",
+    "start": "yarn workspace atlas-cli start"
   },
-  "dependencies": {
-    "@larksuiteoapi/node-sdk": "^1.38.0",
-    "dotenv": "^16.4.7",
-    "express": "^4.21.2",
-    "qrcode": "^1.5.4"
-  },
-  "optionalDependencies": {
-    "node-telegram-bot-api": "^0.66.0",
-    "discord.js": "^14.16.0"
-  },
-  "devDependencies": {
-    "@types/express": "^5.0.0",
-    "@types/node": "^22.13.0",
-    "@types/node-telegram-bot-api": "^0.64.0",
-    "@types/qrcode": "^1.5.6",
-    "tsx": "^4.19.0",
-    "typescript": "^5.7.0",
-    "vitest": "^4.1.0"
-  }
+  "workspaces": [
+    "packages/*"
+  ],
+  "packageManager": "yarn@1.22.22"
 }
