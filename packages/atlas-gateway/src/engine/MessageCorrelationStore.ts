@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { CardState } from './CardStateStore.js';
 import type { CardStateStoreImpl } from './CardStateStore.js';
+import type { PermissionActionPayload } from './PermissionCard.js';
+
+// Re-export so existing consumers can still import from here
+export type { PermissionActionPayload } from './PermissionCard.js';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -13,24 +17,6 @@ export interface CorrelationEntry {
   permissionRequestId?: string;
   createdAt: number;
   status: 'active' | 'completed' | 'expired';
-}
-
-/**
- * Minimal payload type for resolveCardAction.
- * Task 6 will create the full Zod-validated version.
- */
-export interface PermissionActionPayload {
-  v: 1;
-  nonce: string;
-  iat: number;
-  exp: number;
-  action: 'approve' | 'approve_scoped' | 'deny' | 'abort';
-  sessionId: string;
-  requestId: string;
-  toolName: string;
-  toolCallId: string;
-  agentType: 'claude' | 'codex' | 'gemini';
-  scope?: { type: string; [key: string]: unknown };
 }
 
 export interface SerializedCorrelationStore {
