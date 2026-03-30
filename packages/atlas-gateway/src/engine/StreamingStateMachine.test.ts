@@ -3,6 +3,7 @@ import {
   StreamBuffer,
   StreamingStateMachineImpl,
   type StreamingState,
+  type StreamBufferConfig,
   type FlushHandler,
 } from './StreamingStateMachine.js';
 
@@ -180,10 +181,10 @@ describe('StreamingStateMachineImpl', () => {
     vi.useRealTimers();
   });
 
-  function createSM(config?: { throttleMs?: number; buffer?: Record<string, unknown> }) {
+  function createSM(config?: { throttleMs?: number; buffer?: Partial<StreamBufferConfig> }) {
     return new StreamingStateMachineImpl({
       throttleMs: config?.throttleMs ?? 300,
-      buffer: config?.buffer as any,
+      buffer: config?.buffer,
     });
   }
 
@@ -909,7 +910,7 @@ describe('StreamingStateMachineImpl', () => {
   // ── onSendError during draining ──
 
   describe('send error during draining', () => {
-    it('should transition to error if send fails during draining', () => {
+    it('should transition to error if send fails during draining and resolve with partial content', async () => {
       const sm = createSM({ throttleMs: 300 });
       const flushHandler = vi.fn().mockResolvedValue(undefined);
       sm.onFlush(flushHandler);
@@ -917,11 +918,14 @@ describe('StreamingStateMachineImpl', () => {
       sm.start('card-1');
       sm.append('data');
 
-      sm.finish();
+      const finishPromise = sm.finish();
       expect(sm.state).toBe('draining');
 
       sm.onSendError(new Error('fail during drain'));
       expect(sm.state).toBe('error');
+
+      const result = await finishPromise;
+      expect(result).toBe('data');
     });
   });
 });

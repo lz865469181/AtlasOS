@@ -33,6 +33,7 @@ export interface StreamingStateMachine {
   readonly state: StreamingState;
   readonly buffer: StreamBuffer;
   readonly cardId: string;
+  readonly pauseReason: 'permission' | 'rate-limit' | null;
 
   start(cardId: string): void;
   append(text: string): void;
@@ -175,6 +176,7 @@ const DEFAULT_SM_CONFIG: StreamingStateMachineConfig = {
 export class StreamingStateMachineImpl implements StreamingStateMachine {
   private _state: StreamingState = 'idle';
   private _cardId = '';
+  private _pauseReason: 'permission' | 'rate-limit' | null = null;
   private _buffer: StreamBuffer;
   private _config: StreamingStateMachineConfig;
 
@@ -205,6 +207,10 @@ export class StreamingStateMachineImpl implements StreamingStateMachine {
 
   get cardId(): string {
     return this._cardId;
+  }
+
+  get pauseReason(): 'permission' | 'rate-limit' | null {
+    return this._pauseReason;
   }
 
   // ── Lifecycle methods ──
@@ -242,11 +248,13 @@ export class StreamingStateMachineImpl implements StreamingStateMachine {
       throw new Error('Cannot pause in idle state');
     }
     this.clearThrottleTimer();
+    this._pauseReason = reason;
     this.transition('paused');
   }
 
   resume(): void {
     this.assertState('resume', 'paused');
+    this._pauseReason = null;
     this.transition('buffering');
 
     if (this._buffer.hasContent) {
@@ -341,6 +349,11 @@ export class StreamingStateMachineImpl implements StreamingStateMachine {
   onSendError(err: Error): void {
     if (this._state !== 'sending' && this._state !== 'draining') return;
     this.clearThrottleTimer();
+    if (this.drainResolve) {
+      this.drainResolve(this._buffer.fullContent);
+      this.drainResolve = null;
+      this.drainPromise = null;
+    }
     this.transition('error');
   }
 
