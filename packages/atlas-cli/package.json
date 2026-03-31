@@ -12,7 +12,8 @@
   },
   "dependencies": {
     "atlas-gateway": "0.1.0",
-    "atlas-agent": "0.1.0"
+    "atlas-agent": "0.1.0",
+    "dotenv": "^16.4.0"
   },
   "devDependencies": {
     "@types/node": "^22.13.0",
