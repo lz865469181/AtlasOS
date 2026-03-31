@@ -41,6 +41,7 @@ function makeMessageEvent(overrides?: Partial<{
   openId: string;
   mentions: FeishuMessageEvent['message']['mentions'];
   parentId: string;
+  rootId: string;
 }>): FeishuMessageEvent {
   const now = Date.now();
   return {
@@ -57,6 +58,7 @@ function makeMessageEvent(overrides?: Partial<{
       create_time: overrides?.createTime ?? String(now),
       mentions: overrides?.mentions,
       parent_id: overrides?.parentId,
+      root_id: overrides?.rootId,
     },
   };
 }
@@ -470,6 +472,32 @@ describe('FeishuAdapter', () => {
       const event = adapter.toChannelEvent(data);
       expect(event).not.toBeNull();
       expect(event!.userId).toBe('unknown');
+    });
+
+    it('sets threadId from root_id when present and different from message_id', () => {
+      const data = makeMessageEvent({
+        messageId: 'msg_reply',
+        rootId: 'msg_root',
+        parentId: 'msg_parent',
+        chatType: 'group',
+      });
+      const event = adapter.toChannelEvent(data);
+      expect(event).not.toBeNull();
+      expect(event!.threadId).toBe('msg_root');
+    });
+
+    it('does not set threadId when root_id equals message_id', () => {
+      const data = makeMessageEvent({ messageId: 'msg_root', rootId: 'msg_root' });
+      const event = adapter.toChannelEvent(data);
+      expect(event).not.toBeNull();
+      expect(event!.threadId).toBeUndefined();
+    });
+
+    it('does not set threadId when root_id is absent', () => {
+      const data = makeMessageEvent();
+      const event = adapter.toChannelEvent(data);
+      expect(event).not.toBeNull();
+      expect(event!.threadId).toBeUndefined();
     });
   });
 

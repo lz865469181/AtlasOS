@@ -505,12 +505,17 @@ export class FeishuAdapter implements ChannelAdapter {
         return null;
     }
 
+    const threadId = message.root_id && message.root_id !== message.message_id
+      ? message.root_id
+      : undefined;
+
     return {
       channelId: 'feishu',
       chatId,
       userId,
       userName,
       messageId,
+      threadId,
       content,
       timestamp,
       replyToId: message.parent_id,

@@ -6,6 +6,7 @@ export const ChannelEventSchema = z.object({
   userId: z.string(),
   userName: z.string(),
   messageId: z.string(),
+  threadId: z.string().optional(),
   content: z.discriminatedUnion('type', [
     z.object({ type: z.literal('text'), text: z.string() }),
     z.object({ type: z.literal('image'), url: z.string(), mimeType: z.string().optional() }),
