@@ -14,7 +14,9 @@ const app = createApp({
   feishuAppId: required('FEISHU_APP_ID'),
   feishuAppSecret: required('FEISHU_APP_SECRET'),
   agentCwd: process.env.AGENT_CWD ?? process.cwd(),
-  agentEnv: process.env as Record<string, string>,
+  agentEnv: Object.fromEntries(
+    Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+  ),
 });
 
 await app.start();

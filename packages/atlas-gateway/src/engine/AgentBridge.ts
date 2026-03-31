@@ -52,32 +52,46 @@ export class AgentBridge {
     const key = sessionKey(event);
 
     await this.queue.enqueue(key, async () => {
-      // Ensure agent exists for this gateway session
-      let managed = this.sessions.get(session.sessionId);
+      try {
+        // Ensure agent exists for this gateway session
+        let managed = this.sessions.get(session.sessionId);
 
-      if (!managed) {
-        // First call: create agent, start session, bind onMessage ONCE
-        const agent = this.registry.create(session.agentId, this.agentOpts);
+        if (!managed) {
+          // First call: create agent, start session, bind onMessage ONCE
+          const agent = this.registry.create(session.agentId, this.agentOpts);
 
-        const result = await agent.startSession();
+          const result = await agent.startSession();
 
-        const handler: AgentMessageHandler = (msg: AgentMessage) => {
-          this.cardEngine.handleMessage(session.sessionId, session.chatId, msg);
+          const handler: AgentMessageHandler = (msg: AgentMessage) => {
+            this.cardEngine.handleMessage(session.sessionId, session.chatId, msg);
+          };
+          agent.onMessage(handler);
+
+          managed = {
+            agent,
+            agentSessionId: result.sessionId,
+            handler,
+          };
+          this.sessions.set(session.sessionId, managed);
+        }
+
+        // Only send text content
+        if (event.content.type !== 'text') return;
+
+        await managed.agent.sendPrompt(managed.agentSessionId, event.content.text);
+      } catch (err) {
+        const entry = {
+          time: new Date().toISOString(),
+          level: 'error',
+          msg: 'AgentBridge.handlePrompt failed',
+          sessionId: session.sessionId,
+          chatId: session.chatId,
+          agentId: session.agentId,
+          error: String(err),
         };
-        agent.onMessage(handler);
-
-        managed = {
-          agent,
-          agentSessionId: result.sessionId,
-          handler,
-        };
-        this.sessions.set(session.sessionId, managed);
+        console.error(JSON.stringify(entry));
+        throw err;
       }
-
-      // Only send text content
-      if (event.content.type !== 'text') return;
-
-      await managed.agent.sendPrompt(managed.agentSessionId, event.content.text);
     });
   }
 
