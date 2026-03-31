@@ -5,7 +5,7 @@ import {
   MessageCorrelationStoreImpl,
   type MessageCorrelationStore,
 } from './MessageCorrelationStore.js';
-import type { ChannelSender } from '../channel/ChannelSender.js';
+import type { ChannelSender, SenderFactory } from '../channel/ChannelSender.js';
 import type { CardModel } from '../cards/CardModel.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -39,6 +39,11 @@ function createMockSender(): ChannelSender {
   };
 }
 
+
+function createMockSenderFactory(sender?: ChannelSender): SenderFactory {
+  const defaultSender = sender ?? createMockSender();
+  return vi.fn((_chatId: string) => defaultSender);
+}
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 describe('CardRenderPipeline', () => {
@@ -46,6 +51,7 @@ describe('CardRenderPipeline', () => {
   let correlationStore: MessageCorrelationStore;
   let renderer: CardRenderer;
   let sender: ChannelSender;
+  let senderFactory: SenderFactory;
   let pipeline: CardRenderPipeline;
 
   beforeEach(() => {
@@ -59,7 +65,8 @@ describe('CardRenderPipeline', () => {
     correlationStore = new MessageCorrelationStoreImpl(store);
     renderer = createMockRenderer();
     sender = createMockSender();
-    pipeline = new CardRenderPipeline(store, renderer, sender, correlationStore);
+    senderFactory = createMockSenderFactory(sender);
+    pipeline = new CardRenderPipeline(store, renderer, senderFactory, correlationStore);
   });
 
   afterEach(() => {
@@ -389,5 +396,106 @@ describe('CardRenderPipeline', () => {
     const messageIds = calls.map((c: unknown[]) => c[0]);
     expect(messageIds).toContain('msg_c1');
     expect(messageIds).toContain('msg_c2');
+  });
+
+
+  // ── SenderFactory-specific tests ──────────────────────────────────────
+
+  describe('SenderFactory per-chat resolution', () => {
+    it('should call senderFactory with the correct chatId from CardState', async () => {
+      const card = store.create('chat-abc', 'streaming', makeModel('hello'));
+      store.setMessageId(card.cardId, 'msg_existing');
+
+      store.update(card.cardId, (s) => {
+        s.content = makeModel('updated');
+      });
+
+      await flushAll();
+
+      expect(senderFactory).toHaveBeenCalledWith('chat-abc');
+    });
+
+    it('should resolve different senders for different chatIds', async () => {
+      const senderA = createMockSender();
+      const senderB = createMockSender();
+      const perChatFactory: SenderFactory = vi.fn((chatId: string) => {
+        return chatId === 'chat-a' ? senderA : senderB;
+      });
+
+      pipeline.dispose();
+      pipeline = new CardRenderPipeline(store, renderer, perChatFactory, correlationStore);
+
+      const cardA = store.create('chat-a', 'streaming', makeModel('a'));
+      const cardB = store.create('chat-b', 'tool', makeModel('b'));
+      store.setMessageId(cardA.cardId, 'msg_a');
+      store.setMessageId(cardB.cardId, 'msg_b');
+
+      store.update(cardA.cardId, (s) => {
+        s.content = makeModel('a_updated');
+      });
+      store.update(cardB.cardId, (s) => {
+        s.content = makeModel('b_updated');
+      });
+
+      await flushAll();
+
+      expect(senderA.updateCard).toHaveBeenCalledTimes(1);
+      expect(senderA.updateCard).toHaveBeenCalledWith(
+        'msg_a',
+        expect.objectContaining({ header: { title: 'rendered' } }),
+      );
+
+      expect(senderB.updateCard).toHaveBeenCalledTimes(1);
+      expect(senderB.updateCard).toHaveBeenCalledWith(
+        'msg_b',
+        expect.objectContaining({ header: { title: 'rendered' } }),
+      );
+
+      expect(senderA.updateCard).not.toHaveBeenCalledWith('msg_b', expect.anything());
+      expect(senderB.updateCard).not.toHaveBeenCalledWith('msg_a', expect.anything());
+    });
+
+    it('should resolve sender per send (not cached at construction)', async () => {
+      const card = store.create('chat-x', 'streaming', makeModel('v0'));
+      store.setMessageId(card.cardId, 'msg_x');
+
+      store.update(card.cardId, (s) => {
+        s.content = makeModel('v1');
+      });
+      await flushAll();
+
+      store.update(card.cardId, (s) => {
+        s.content = makeModel('v2');
+      });
+      await flushAll();
+
+      expect(senderFactory).toHaveBeenCalledTimes(2);
+      expect(senderFactory).toHaveBeenCalledWith('chat-x');
+    });
+
+    it('should use factory-resolved sender for new card sendCard', async () => {
+      const specificSender = createMockSender();
+      const specificFactory: SenderFactory = vi.fn(() => specificSender);
+
+      pipeline.dispose();
+      pipeline = new CardRenderPipeline(store, renderer, specificFactory, correlationStore);
+
+      const card = store.create('chat-new', 'streaming', makeModel('initial'));
+      correlationStore.create({
+        cardId: card.cardId,
+        messageId: null,
+        chatId: 'chat-new',
+        sessionId: 'sess-new',
+      });
+
+      store.update(card.cardId, (s) => {
+        s.content = makeModel('first-send');
+      });
+
+      await flushAll();
+
+      expect(specificFactory).toHaveBeenCalledWith('chat-new');
+      expect(specificSender.sendCard).toHaveBeenCalledTimes(1);
+    });
   });
 });

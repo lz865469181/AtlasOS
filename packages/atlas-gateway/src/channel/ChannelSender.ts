@@ -11,3 +11,9 @@ export interface ChannelSender {
   sendFile?(fileData: Buffer, filename: string, replyTo?: string): Promise<string>;
   showTyping?(chatId: string): Promise<void>;
 }
+
+/**
+ * Factory that creates a ChannelSender scoped to a specific chat.
+ * Used by CardRenderPipeline to resolve senders per card.
+ */
+export type SenderFactory = (chatId: string) => ChannelSender;

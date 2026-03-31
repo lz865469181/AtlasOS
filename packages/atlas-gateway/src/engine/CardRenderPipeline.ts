@@ -1,5 +1,5 @@
 import type { CardModel } from '../cards/CardModel.js';
-import type { ChannelSender } from '../channel/ChannelSender.js';
+import type { SenderFactory } from '../channel/ChannelSender.js';
 import type { CardStateStoreImpl, CardState } from './CardStateStore.js';
 import type { MessageCorrelationStore } from './MessageCorrelationStore.js';
 
@@ -36,7 +36,7 @@ const MAX_QUEUE_DEPTH = 5;
 export class CardRenderPipeline {
   private readonly store: CardStateStoreImpl;
   private readonly renderer: CardRenderer;
-  private readonly sender: ChannelSender;
+  private readonly senderFactory: SenderFactory;
   private readonly correlationStore: MessageCorrelationStore;
 
   /** Per-card serial send queues. */
@@ -51,12 +51,12 @@ export class CardRenderPipeline {
   constructor(
     store: CardStateStoreImpl,
     renderer: CardRenderer,
-    sender: ChannelSender,
+    senderFactory: SenderFactory,
     correlationStore: MessageCorrelationStore,
   ) {
     this.store = store;
     this.renderer = renderer;
-    this.sender = sender;
+    this.senderFactory = senderFactory;
     this.correlationStore = correlationStore;
 
     this.unsubscribe = this.store.onChange(
@@ -153,6 +153,7 @@ export class CardRenderPipeline {
 
   private async send(entry: QueueEntry): Promise<void> {
     const { cardId, state } = entry;
+    const sender = this.senderFactory(state.chatId);
 
     const rendered = this.renderer.render(state.content, {
       status: state.status,
@@ -165,10 +166,10 @@ export class CardRenderPipeline {
 
     if (messageId) {
       // Card already has a message — update (PATCH).
-      await this.sender.updateCard(messageId, rendered);
+      await sender.updateCard(messageId, rendered);
     } else {
       // Card is new — send and record the messageId.
-      const newMessageId = await this.sender.sendCard(rendered);
+      const newMessageId = await sender.sendCard(rendered);
       this.correlationStore.setMessageId(cardId, newMessageId);
       this.store.setMessageId(cardId, newMessageId);
     }
