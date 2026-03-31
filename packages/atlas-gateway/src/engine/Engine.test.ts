@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { EngineImpl } from './Engine.js';
 import type { EngineDeps, CardActionEvent, OnPromptCallback } from './Engine.js';
 import type { ChannelEvent } from '../channel/channelEvent.js';
-import type { ChannelSender } from '../channel/ChannelSender.js';
+import type { ChannelSender, SenderFactory } from '../channel/ChannelSender.js';
 import type { CardModel } from '../cards/CardModel.js';
 import type { CardStateStoreImpl } from './CardStateStore.js';
 import type { MessageCorrelationStoreImpl } from './MessageCorrelationStore.js';
@@ -10,9 +10,9 @@ import type { CardRenderPipeline } from './CardRenderPipeline.js';
 import type { CardEngineImpl } from './CardEngine.js';
 import type { SessionManagerImpl, SessionInfo } from './SessionManager.js';
 import type { CommandRegistryImpl, Command } from './CommandRegistry.js';
-import type { PermissionPayloadValidatorImpl, PermissionActionPayload } from './PermissionCard.js';
+import type { PermissionService } from './PermissionService.js';
 
-// ── Mock Factories ──────────────────────────────────────────────────────────
+// -- Mock Factories ----------------------------------------------------------
 
 function mockSender(): ChannelSender {
   return {
@@ -21,6 +21,15 @@ function mockSender(): ChannelSender {
     sendCard: vi.fn().mockResolvedValue('msg-3'),
     updateCard: vi.fn().mockResolvedValue(undefined),
   };
+}
+
+function mockSenderFactory(): { factory: SenderFactory; lastSender: () => ChannelSender } {
+  let last: ChannelSender;
+  const factory = vi.fn((_chatId: string) => {
+    last = mockSender();
+    return last;
+  }) as unknown as SenderFactory;
+  return { factory, lastSender: () => last };
 }
 
 function mockSessionManager(): SessionManagerImpl {
@@ -78,20 +87,14 @@ function mockPipeline(): CardRenderPipeline {
   } as unknown as CardRenderPipeline;
 }
 
-function mockPermissionValidator(
-  validateResult: { ok: true; data: PermissionActionPayload } | { ok: false; error: string } = {
-    ok: false,
-    error: 'invalid',
-  },
-): PermissionPayloadValidatorImpl {
+function mockPermissionService(): PermissionService {
   return {
-    validate: vi.fn().mockReturnValue(validateResult),
-    createPayload: vi.fn(),
-    cleanup: vi.fn(),
-  } as unknown as PermissionPayloadValidatorImpl;
+    handleAction: vi.fn().mockResolvedValue(undefined),
+  } as unknown as PermissionService;
 }
 
 function createDeps(overrides?: Partial<EngineDeps>): EngineDeps {
+  const { factory } = mockSenderFactory();
   return {
     cardStore: {} as CardStateStoreImpl,
     correlationStore: {} as MessageCorrelationStoreImpl,
@@ -99,8 +102,8 @@ function createDeps(overrides?: Partial<EngineDeps>): EngineDeps {
     cardEngine: mockCardEngine(),
     sessionManager: mockSessionManager(),
     commandRegistry: mockCommandRegistry(),
-    permissionPayloadValidator: mockPermissionValidator(),
-    sender: mockSender(),
+    permissionService: mockPermissionService(),
+    senderFactory: factory,
     ...overrides,
   };
 }
@@ -131,7 +134,7 @@ function imageEvent(overrides?: Partial<ChannelEvent>): ChannelEvent {
   };
 }
 
-// ── Tests ───────────────────────────────────────────────────────────────────
+// -- Tests -------------------------------------------------------------------
 
 describe('Engine', () => {
   let deps: EngineDeps;
@@ -142,7 +145,7 @@ describe('Engine', () => {
     engine = new EngineImpl(deps);
   });
 
-  // ── Lifecycle ─────────────────────────────────────────────────────────
+  // -- Lifecycle -----------------------------------------------------------
 
   describe('start()', () => {
     it('restores session manager', async () => {
@@ -159,30 +162,33 @@ describe('Engine', () => {
     });
   });
 
-  // ── handleChannelEvent ────────────────────────────────────────────────
+  // -- handleChannelEvent -------------------------------------------------
 
   describe('handleChannelEvent', () => {
-    it('resolves slash command and sends text response', async () => {
+    it('resolves slash command and sends text response via senderFactory', async () => {
       const cmd: Command = {
         name: 'help',
         description: 'Show help',
         execute: vi.fn().mockResolvedValue('Help text'),
       };
 
+      const { factory, lastSender } = mockSenderFactory();
       deps = createDeps({
         commandRegistry: mockCommandRegistry({ command: cmd, args: '' }),
+        senderFactory: factory,
       });
       engine = new EngineImpl(deps);
 
       const event = textEvent('/help');
       await engine.handleChannelEvent(event);
 
+      expect(factory).toHaveBeenCalledWith('chat-1');
       expect(deps.commandRegistry.resolve).toHaveBeenCalledWith('/help');
       expect(cmd.execute).toHaveBeenCalledWith('', expect.objectContaining({
         chatId: 'chat-1',
         userId: 'user-1',
       }));
-      expect(deps.sender.sendText).toHaveBeenCalledWith('Help text', 'msg-evt-1');
+      expect(lastSender().sendText).toHaveBeenCalledWith('Help text', 'msg-evt-1');
     });
 
     it('resolves slash command and sends card response', async () => {
@@ -196,16 +202,18 @@ describe('Engine', () => {
         execute: vi.fn().mockResolvedValue(cardResult),
       };
 
+      const { factory, lastSender } = mockSenderFactory();
       deps = createDeps({
         commandRegistry: mockCommandRegistry({ command: cmd, args: '' }),
+        senderFactory: factory,
       });
       engine = new EngineImpl(deps);
 
       const event = textEvent('/status');
       await engine.handleChannelEvent(event);
 
-      expect(deps.sender.sendCard).toHaveBeenCalledWith(cardResult, 'msg-evt-1');
-      expect(deps.sender.sendText).not.toHaveBeenCalled();
+      expect(lastSender().sendCard).toHaveBeenCalledWith(cardResult, 'msg-evt-1');
+      expect(lastSender().sendText).not.toHaveBeenCalled();
     });
 
     it('passes command args to execute', async () => {
@@ -251,7 +259,6 @@ describe('Engine', () => {
       deps = createDeps({ onPrompt });
       engine = new EngineImpl(deps);
 
-      // commandRegistry.resolve returns null (default mock)
       const event = textEvent('/unknown-cmd');
       await engine.handleChannelEvent(event);
 
@@ -290,7 +297,6 @@ describe('Engine', () => {
     });
 
     it('works without onPrompt callback', async () => {
-      // deps has no onPrompt by default
       const event = textEvent('Hello');
       await engine.handleChannelEvent(event);
 
@@ -298,173 +304,88 @@ describe('Engine', () => {
       // Should not throw
     });
 
-    it('provides correct CommandContext to command', async () => {
+    it('provides correct CommandContext with sender from senderFactory', async () => {
       const cmd: Command = {
         name: 'test',
         description: 'Test',
         execute: vi.fn().mockResolvedValue('ok'),
       };
 
+      const { factory, lastSender } = mockSenderFactory();
       deps = createDeps({
         commandRegistry: mockCommandRegistry({ command: cmd, args: '' }),
+        senderFactory: factory,
       });
       engine = new EngineImpl(deps);
 
       await engine.handleChannelEvent(textEvent('/test'));
 
-      expect(cmd.execute).toHaveBeenCalledWith('', {
-        chatId: 'chat-1',
-        userId: 'user-1',
-        sessionManager: deps.sessionManager,
-        sender: deps.sender,
-      });
+      expect(factory).toHaveBeenCalledWith('chat-1');
+      const callArgs = (cmd.execute as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(callArgs[1].chatId).toBe('chat-1');
+      expect(callArgs[1].userId).toBe('user-1');
+      expect(callArgs[1].sessionManager).toBe(deps.sessionManager);
+      // sender should be the one returned by senderFactory
+      expect(callArgs[1].sender).toBe(lastSender());
     });
   });
 
-  // ── handleCardAction ──────────────────────────────────────────────────
+  // -- handleCardAction ----------------------------------------------------
 
   describe('handleCardAction', () => {
-    it('validates payload and routes to cardEngine on success', async () => {
-      const validPayload: PermissionActionPayload = {
-        v: 1,
-        nonce: '00000000-0000-0000-0000-000000000001',
-        iat: Date.now(),
-        exp: Date.now() + 300_000,
-        action: 'approve',
-        sessionId: 'sess-1',
-        requestId: 'req-1',
-        toolName: 'Bash',
-        toolCallId: 'tc-1',
-        agentType: 'claude',
-      };
-
-      deps = createDeps({
-        permissionPayloadValidator: mockPermissionValidator({
-          ok: true,
-          data: validPayload,
-        }),
-      });
+    it('delegates to permissionService.handleAction', async () => {
+      const permissionService = mockPermissionService();
+      deps = createDeps({ permissionService });
       engine = new EngineImpl(deps);
 
       const action: CardActionEvent = {
         messageId: 'msg-card-1',
         chatId: 'chat-1',
         userId: 'user-1',
-        value: validPayload as unknown as Record<string, unknown>,
+        value: { v: 1, action: 'approve', sessionId: 'sess-1' },
       };
 
       await engine.handleCardAction(action);
 
-      expect(deps.permissionPayloadValidator.validate).toHaveBeenCalledWith(validPayload);
-      expect(deps.cardEngine.handlePermissionResponse).toHaveBeenCalledWith(
-        'sess-1',
-        validPayload,
-      );
+      expect(permissionService.handleAction).toHaveBeenCalledWith(action);
     });
 
-    it('ignores card action when validation fails', async () => {
-      deps = createDeps({
-        permissionPayloadValidator: mockPermissionValidator({
-          ok: false,
-          error: 'Payload expired',
-        }),
-      });
+    it('delegates deny action to permissionService', async () => {
+      const permissionService = mockPermissionService();
+      deps = createDeps({ permissionService });
       engine = new EngineImpl(deps);
-
-      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
       const action: CardActionEvent = {
         messageId: 'msg-card-2',
         chatId: 'chat-1',
         userId: 'user-1',
-        value: { invalid: true },
+        value: { v: 1, action: 'deny', sessionId: 'sess-2' },
       };
 
       await engine.handleCardAction(action);
 
-      expect(deps.cardEngine.handlePermissionResponse).not.toHaveBeenCalled();
-      expect(consoleSpy).toHaveBeenCalledWith(
-        '[Engine] Invalid card action payload:',
-        'Payload expired',
-      );
-
-      consoleSpy.mockRestore();
+      expect(permissionService.handleAction).toHaveBeenCalledWith(action);
     });
 
-    it('handles deny action correctly', async () => {
-      const denyPayload: PermissionActionPayload = {
-        v: 1,
-        nonce: '00000000-0000-0000-0000-000000000002',
-        iat: Date.now(),
-        exp: Date.now() + 300_000,
-        action: 'deny',
-        sessionId: 'sess-2',
-        requestId: 'req-2',
-        toolName: 'Write',
-        toolCallId: 'tc-2',
-        agentType: 'claude',
-      };
-
-      deps = createDeps({
-        permissionPayloadValidator: mockPermissionValidator({
-          ok: true,
-          data: denyPayload,
-        }),
-      });
+    it('delegates abort action to permissionService', async () => {
+      const permissionService = mockPermissionService();
+      deps = createDeps({ permissionService });
       engine = new EngineImpl(deps);
 
       const action: CardActionEvent = {
         messageId: 'msg-card-3',
         chatId: 'chat-1',
         userId: 'user-1',
-        value: denyPayload as unknown as Record<string, unknown>,
+        value: { v: 1, action: 'abort', sessionId: 'sess-3' },
       };
 
       await engine.handleCardAction(action);
 
-      expect(deps.cardEngine.handlePermissionResponse).toHaveBeenCalledWith(
-        'sess-2',
-        denyPayload,
-      );
-    });
-
-    it('handles abort action correctly', async () => {
-      const abortPayload: PermissionActionPayload = {
-        v: 1,
-        nonce: '00000000-0000-0000-0000-000000000003',
-        iat: Date.now(),
-        exp: Date.now() + 300_000,
-        action: 'abort',
-        sessionId: 'sess-3',
-        requestId: 'req-3',
-        toolName: 'Bash',
-        toolCallId: 'tc-3',
-        agentType: 'codex',
-      };
-
-      deps = createDeps({
-        permissionPayloadValidator: mockPermissionValidator({
-          ok: true,
-          data: abortPayload,
-        }),
-      });
-      engine = new EngineImpl(deps);
-
-      await engine.handleCardAction({
-        messageId: 'msg-card-4',
-        chatId: 'chat-1',
-        userId: 'user-1',
-        value: abortPayload as unknown as Record<string, unknown>,
-      });
-
-      expect(deps.cardEngine.handlePermissionResponse).toHaveBeenCalledWith(
-        'sess-3',
-        abortPayload,
-      );
+      expect(permissionService.handleAction).toHaveBeenCalledWith(action);
     });
   });
 
-  // ── Integration-like scenarios ────────────────────────────────────────
+  // -- Integration-like scenarios ------------------------------------------
 
   describe('full lifecycle', () => {
     it('start -> handleChannelEvent -> stop', async () => {

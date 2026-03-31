@@ -1,5 +1,5 @@
 import type { ChannelEvent } from '../channel/channelEvent.js';
-import type { ChannelSender } from '../channel/ChannelSender.js';
+import type { ChannelSender, SenderFactory } from '../channel/ChannelSender.js';
 import type { CardModel } from '../cards/CardModel.js';
 import type { CardStateStoreImpl } from './CardStateStore.js';
 import type { MessageCorrelationStoreImpl } from './MessageCorrelationStore.js';
@@ -7,7 +7,7 @@ import type { CardRenderPipeline } from './CardRenderPipeline.js';
 import type { CardEngineImpl } from './CardEngine.js';
 import type { SessionManagerImpl, SessionInfo } from './SessionManager.js';
 import type { CommandRegistryImpl, CommandContext } from './CommandRegistry.js';
-import type { PermissionPayloadValidatorImpl, PermissionActionPayload } from './PermissionCard.js';
+import type { PermissionService } from './PermissionService.js';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -30,8 +30,8 @@ export interface EngineDeps {
   cardEngine: CardEngineImpl;
   sessionManager: SessionManagerImpl;
   commandRegistry: CommandRegistryImpl;
-  permissionPayloadValidator: PermissionPayloadValidatorImpl;
-  sender: ChannelSender;
+  permissionService: PermissionService;
+  senderFactory: SenderFactory;
   onPrompt?: OnPromptCallback;
 }
 
@@ -51,8 +51,8 @@ export class EngineImpl implements Engine {
   private readonly cardEngine: CardEngineImpl;
   private readonly sessionManager: SessionManagerImpl;
   private readonly commandRegistry: CommandRegistryImpl;
-  private readonly permissionPayloadValidator: PermissionPayloadValidatorImpl;
-  private readonly sender: ChannelSender;
+  private readonly permissionService: PermissionService;
+  private readonly senderFactory: SenderFactory;
   private readonly onPrompt?: OnPromptCallback;
 
   constructor(deps: EngineDeps) {
@@ -62,8 +62,8 @@ export class EngineImpl implements Engine {
     this.cardEngine = deps.cardEngine;
     this.sessionManager = deps.sessionManager;
     this.commandRegistry = deps.commandRegistry;
-    this.permissionPayloadValidator = deps.permissionPayloadValidator;
-    this.sender = deps.sender;
+    this.permissionService = deps.permissionService;
+    this.senderFactory = deps.senderFactory;
     this.onPrompt = deps.onPrompt;
   }
 
@@ -84,25 +84,26 @@ export class EngineImpl implements Engine {
     // 1. Extract text from event
     const text = event.content.type === 'text' ? event.content.text : null;
 
-    // 2. If text starts with `/`, try command resolution
+    // 2. If text starts with '/', try command resolution
     if (text && text.startsWith('/')) {
       const resolved = this.commandRegistry.resolve(text);
       if (resolved) {
+        const sender = this.senderFactory(event.chatId);
         const context: CommandContext = {
           chatId: event.chatId,
           userId: event.userId,
           sessionManager: this.sessionManager,
-          sender: this.sender,
+          sender,
         };
 
         const result = await resolved.command.execute(resolved.args, context);
 
         // Send the command response
         if (typeof result === 'string') {
-          await this.sender.sendText(result, event.messageId);
+          await sender.sendText(result, event.messageId);
         } else {
           // result is a CardModel
-          await this.sender.sendCard(result as CardModel, event.messageId);
+          await sender.sendCard(result as CardModel, event.messageId);
         }
 
         return;
@@ -121,24 +122,6 @@ export class EngineImpl implements Engine {
   // ── Card Actions ────────────────────────────────────────────────────────
 
   async handleCardAction(event: CardActionEvent): Promise<void> {
-    // 1. Parse value as PermissionActionPayload
-    let payload: PermissionActionPayload;
-    try {
-      payload = event.value as unknown as PermissionActionPayload;
-    } catch {
-      // Could not parse — ignore
-      return;
-    }
-
-    // 2. Validate with permissionPayloadValidator
-    const result = this.permissionPayloadValidator.validate(payload);
-    if (!result.ok) {
-      // Invalid payload — log and ignore
-      console.error('[Engine] Invalid card action payload:', result.error);
-      return;
-    }
-
-    // 3. Route to cardEngine for permission handling
-    this.cardEngine.handlePermissionResponse(result.data.sessionId, result.data);
+    await this.permissionService.handleAction(event);
   }
 }
