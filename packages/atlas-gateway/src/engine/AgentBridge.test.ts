@@ -219,4 +219,75 @@ describe('AgentBridge', () => {
       b.respondToPermission('gw-session-1', 'req-1', true),
     ).resolves.toBeUndefined();
   });
+
+  // ── cancelSession ──────────────────────────────────────────────────────
+
+  it('cancelSession calls agent.cancel and SM.cancel', async () => {
+    const fakeSM = { cancel: vi.fn() };
+    (cardEngine.getStreamingState as ReturnType<typeof vi.fn>).mockReturnValue(fakeSM);
+
+    const session = makeSession();
+    await bridge.handlePrompt(session, makeEvent());
+
+    await bridge.cancelSession('gw-session-1');
+
+    expect(agent.cancel).toHaveBeenCalledWith('agent-sid-1');
+    expect(cardEngine.getStreamingState).toHaveBeenCalledWith('gw-session-1');
+    expect(fakeSM.cancel).toHaveBeenCalledOnce();
+  });
+
+  it('cancelSession no-ops for unknown session', async () => {
+    await expect(bridge.cancelSession('unknown')).resolves.toBeUndefined();
+    expect(agent.cancel).not.toHaveBeenCalled();
+  });
+
+  it('cancelSession works when no streaming SM exists', async () => {
+    (cardEngine.getStreamingState as ReturnType<typeof vi.fn>).mockReturnValue(undefined);
+
+    const session = makeSession();
+    await bridge.handlePrompt(session, makeEvent());
+
+    await expect(bridge.cancelSession('gw-session-1')).resolves.toBeUndefined();
+    expect(agent.cancel).toHaveBeenCalledWith('agent-sid-1');
+  });
+
+  // ── destroySession ─────────────────────────────────────────────────────
+
+  it('destroySession cancels, removes session, disposes agent', async () => {
+    const session = makeSession();
+    await bridge.handlePrompt(session, makeEvent());
+
+    await bridge.destroySession('gw-session-1');
+
+    expect(agent.cancel).toHaveBeenCalledWith('agent-sid-1');
+    expect(cardEngine.dispose).toHaveBeenCalledWith('gw-session-1');
+    expect(agent.offMessage).toHaveBeenCalled();
+    expect(agent.dispose).toHaveBeenCalledOnce();
+
+    // Session should be gone — second destroy is a no-op
+    await expect(bridge.destroySession('gw-session-1')).resolves.toBeUndefined();
+  });
+
+  it('destroySession no-ops for unknown session', async () => {
+    await expect(bridge.destroySession('unknown')).resolves.toBeUndefined();
+  });
+
+  it('destroySession does not dispose agent when shared by another session', async () => {
+    // Create two sessions that share the same agent instance
+    const session1 = makeSession({ sessionId: 'gw-1', chatId: 'chat-1' });
+    const session2 = makeSession({ sessionId: 'gw-2', chatId: 'chat-2' });
+
+    await bridge.handlePrompt(session1, makeEvent({ chatId: 'chat-1' }));
+    await bridge.handlePrompt(session2, makeEvent({ chatId: 'chat-2' }));
+
+    // Destroy first session
+    await bridge.destroySession('gw-1');
+
+    // Agent should NOT be disposed — still in use by gw-2
+    expect(agent.dispose).not.toHaveBeenCalled();
+
+    // Destroy second session — now agent should be disposed
+    await bridge.destroySession('gw-2');
+    expect(agent.dispose).toHaveBeenCalledOnce();
+  });
 });

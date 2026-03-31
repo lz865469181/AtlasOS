@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { CommandRegistryImpl, type Command } from './CommandRegistry.js';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { CommandRegistryImpl, type Command, type CommandContext, type BridgeLike, type SessionManagerLike } from './CommandRegistry.js';
+import type { ChannelSender } from '../channel/ChannelSender.js';
 
 describe('CommandRegistry', () => {
   let registry: CommandRegistryImpl;
@@ -120,8 +121,8 @@ describe('CommandRegistry', () => {
     });
 
     it('should match single-char unambiguous prefix', () => {
-      // /a -> only "agent" starts with "a"
-      const result = registry.resolve('/a');
+      // /a -> only "agent" starts with "a" (among name prefixes)
+      const result = registry.resolve('/ag');
       expect(result).not.toBeNull();
       expect(result!.command.name).toBe('agent');
     });
@@ -200,8 +201,10 @@ describe('CommandRegistry', () => {
       expect(names).toContain('mode');
       expect(names).toContain('cancel');
       expect(names).toContain('status');
+      expect(names).toContain('new');
+      expect(names).toContain('takeover');
       expect(names).toContain('help');
-      expect(commands).toHaveLength(6);
+      expect(commands).toHaveLength(8);
     });
 
     it('should include custom commands after registration', () => {
@@ -212,7 +215,7 @@ describe('CommandRegistry', () => {
       });
       const names = registry.listCommands().map((c) => c.name);
       expect(names).toContain('deploy');
-      expect(names).toHaveLength(7);
+      expect(names).toHaveLength(9);
     });
   });
 
@@ -236,21 +239,168 @@ describe('CommandRegistry', () => {
     });
   });
 
-  // ── execute stubs ───────────────────────────────────────────────────────
+  // ── execute: help ─────────────────────────────────────────────────────
 
-  describe('built-in command stubs', () => {
-    it('should return a string from help execute', async () => {
+  describe('built-in help', () => {
+    it('should return a string listing commands', async () => {
       const result = registry.resolve('/help');
       expect(result).not.toBeNull();
       const output = await result!.command.execute('', {} as never);
       expect(typeof output).toBe('string');
       expect(output as string).toContain('Available commands');
     });
+  });
 
-    it('should return a string from status execute', async () => {
+  // ── execute: real commands ──────────────────────────────────────────────
+
+  describe('real command implementations', () => {
+    function makeContext(overrides?: {
+      session?: Record<string, unknown> | undefined | null;
+      sessions?: Array<Record<string, unknown>>;
+    }): CommandContext {
+      const hasSessionOverride = overrides !== undefined && 'session' in overrides;
+      const session = hasSessionOverride
+        ? overrides.session ?? undefined
+        : { sessionId: 's1', agentId: 'claude', model: 'opus', permissionMode: 'auto', createdAt: Date.now() - 60_000 };
+      const sessions = overrides?.sessions ?? (session ? [session] : []);
+
+      return {
+        chatId: 'chat-1',
+        userId: 'user-1',
+        sessionManager: {
+          get: vi.fn().mockReturnValue(session),
+          switchAgent: vi.fn().mockResolvedValue({}),
+          setModel: vi.fn(),
+          setPermissionMode: vi.fn(),
+          destroy: vi.fn().mockResolvedValue(undefined),
+          listActive: vi.fn().mockReturnValue(sessions),
+        },
+        bridge: {
+          cancelSession: vi.fn().mockResolvedValue(undefined),
+          destroySession: vi.fn().mockResolvedValue(undefined),
+        },
+        sender: {
+          sendText: vi.fn().mockResolvedValue(undefined),
+          sendCard: vi.fn().mockResolvedValue(undefined),
+          updateCard: vi.fn().mockResolvedValue(undefined),
+        } as unknown as ChannelSender,
+      };
+    }
+
+    it('/cancel calls bridge.cancelSession', async () => {
+      const ctx = makeContext();
+      const result = registry.resolve('/cancel');
+      const output = await result!.command.execute('', ctx);
+      expect(ctx.bridge.cancelSession).toHaveBeenCalledWith('s1');
+      expect(output).toBe('Task cancelled.');
+    });
+
+    it('/cancel with no session', async () => {
+      const ctx = makeContext({ session: null });
+      const result = registry.resolve('/cancel');
+      const output = await result!.command.execute('', ctx);
+      expect(output).toBe('No active session to cancel.');
+    });
+
+    it('/status returns session info', async () => {
+      const ctx = makeContext();
       const result = registry.resolve('/status');
-      const output = await result!.command.execute('', {} as never);
-      expect(typeof output).toBe('string');
+      const output = await result!.command.execute('', ctx);
+      expect(output).toContain('Agent: claude');
+      expect(output).toContain('Model: opus');
+      expect(output).toContain('Mode: auto');
+    });
+
+    it('/status with no session', async () => {
+      const ctx = makeContext({ session: null });
+      const result = registry.resolve('/status');
+      const output = await result!.command.execute('', ctx);
+      expect(output).toBe('No active session.');
+    });
+
+    it('/agent with no args lists current', async () => {
+      const ctx = makeContext();
+      const result = registry.resolve('/agent');
+      const output = await result!.command.execute('', ctx);
+      expect(output).toContain('Current agent: claude');
+    });
+
+    it('/agent with arg switches agent', async () => {
+      const ctx = makeContext();
+      const result = registry.resolve('/agent');
+      const output = await result!.command.execute('gemini', ctx);
+      expect(ctx.bridge.destroySession).toHaveBeenCalledWith('s1');
+      expect(ctx.sessionManager.switchAgent).toHaveBeenCalledWith('chat-1', 'gemini');
+      expect(output).toBe('Switched to agent: gemini');
+    });
+
+    it('/model with no args shows current', async () => {
+      const ctx = makeContext();
+      const result = registry.resolve('/model');
+      const output = await result!.command.execute('', ctx);
+      expect(output).toContain('Current model: opus');
+    });
+
+    it('/model with arg sets model', async () => {
+      const ctx = makeContext();
+      const result = registry.resolve('/model');
+      const output = await result!.command.execute('sonnet', ctx);
+      expect(ctx.sessionManager.setModel).toHaveBeenCalledWith('chat-1', 'sonnet');
+      expect(output).toBe('Model set to: sonnet');
+    });
+
+    it('/mode with no args shows current', async () => {
+      const ctx = makeContext();
+      const result = registry.resolve('/mode');
+      const output = await result!.command.execute('', ctx);
+      expect(output).toContain('Current mode: auto');
+    });
+
+    it('/mode with valid arg sets mode', async () => {
+      const ctx = makeContext();
+      const result = registry.resolve('/mode');
+      const output = await result!.command.execute('deny', ctx);
+      expect(ctx.sessionManager.setPermissionMode).toHaveBeenCalledWith('chat-1', 'deny');
+      expect(output).toBe('Permission mode set to: deny');
+    });
+
+    it('/mode with invalid arg returns error', async () => {
+      const ctx = makeContext();
+      const result = registry.resolve('/mode');
+      const output = await result!.command.execute('yolo', ctx);
+      expect(output).toContain('Invalid mode');
+    });
+
+    it('/new destroys session and bridge', async () => {
+      const ctx = makeContext();
+      const result = registry.resolve('/new');
+      const output = await result!.command.execute('', ctx);
+      expect(ctx.bridge.destroySession).toHaveBeenCalledWith('s1');
+      expect(ctx.sessionManager.destroy).toHaveBeenCalledWith('chat-1');
+      expect(output).toBe('Session reset.');
+    });
+
+    it('/takeover with valid sessionId', async () => {
+      const ctx = makeContext({ sessions: [{ sessionId: 'target-s', chatId: 'chat-x', agentId: 'claude' }] });
+      const result = registry.resolve('/takeover');
+      const output = await result!.command.execute('target-s', ctx);
+      expect(ctx.bridge.destroySession).toHaveBeenCalledWith('target-s');
+      expect(ctx.sessionManager.destroy).toHaveBeenCalledWith('chat-x');
+      expect(output).toContain('Session taken over');
+    });
+
+    it('/takeover with unknown sessionId', async () => {
+      const ctx = makeContext({ sessions: [] });
+      const result = registry.resolve('/takeover');
+      const output = await result!.command.execute('nonexistent', ctx);
+      expect(output).toContain('Session not found');
+    });
+
+    it('/takeover with no args', async () => {
+      const ctx = makeContext();
+      const result = registry.resolve('/takeover');
+      const output = await result!.command.execute('', ctx);
+      expect(output).toContain('Usage');
     });
   });
 

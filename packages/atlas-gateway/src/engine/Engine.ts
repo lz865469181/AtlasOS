@@ -6,8 +6,9 @@ import type { MessageCorrelationStoreImpl } from './MessageCorrelationStore.js';
 import type { CardRenderPipeline } from './CardRenderPipeline.js';
 import type { CardEngineImpl } from './CardEngine.js';
 import type { SessionManagerImpl, SessionInfo } from './SessionManager.js';
-import type { CommandRegistryImpl, CommandContext } from './CommandRegistry.js';
+import type { CommandRegistryImpl, CommandContext, BridgeLike } from './CommandRegistry.js';
 import type { PermissionService } from './PermissionService.js';
+import type { IdleWatcher } from './IdleWatcher.js';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -32,6 +33,8 @@ export interface EngineDeps {
   commandRegistry: CommandRegistryImpl;
   permissionService: PermissionService;
   senderFactory: SenderFactory;
+  bridge?: BridgeLike;
+  idleWatcher?: IdleWatcher;
   onPrompt?: OnPromptCallback;
 }
 
@@ -53,6 +56,8 @@ export class EngineImpl implements Engine {
   private readonly commandRegistry: CommandRegistryImpl;
   private readonly permissionService: PermissionService;
   private readonly senderFactory: SenderFactory;
+  private readonly bridge?: BridgeLike;
+  private readonly idleWatcher?: IdleWatcher;
   private readonly onPrompt?: OnPromptCallback;
 
   constructor(deps: EngineDeps) {
@@ -64,6 +69,8 @@ export class EngineImpl implements Engine {
     this.commandRegistry = deps.commandRegistry;
     this.permissionService = deps.permissionService;
     this.senderFactory = deps.senderFactory;
+    this.bridge = deps.bridge;
+    this.idleWatcher = deps.idleWatcher;
     this.onPrompt = deps.onPrompt;
   }
 
@@ -74,6 +81,7 @@ export class EngineImpl implements Engine {
   }
 
   async stop(): Promise<void> {
+    this.idleWatcher?.dispose();
     await this.sessionManager.persist();
     this.pipeline.dispose();
   }
@@ -89,10 +97,15 @@ export class EngineImpl implements Engine {
       const resolved = this.commandRegistry.resolve(text);
       if (resolved) {
         const sender = this.senderFactory(event.chatId);
+        const noopBridge: BridgeLike = {
+          cancelSession: async () => {},
+          destroySession: async () => {},
+        };
         const context: CommandContext = {
           chatId: event.chatId,
           userId: event.userId,
           sessionManager: this.sessionManager,
+          bridge: this.bridge ?? noopBridge,
           sender,
         };
 
@@ -113,7 +126,10 @@ export class EngineImpl implements Engine {
     // 3. Get or create session
     const session = await this.sessionManager.getOrCreate(event.chatId);
 
-    // 4. Invoke the onPrompt callback to let callers wire the agent
+    // 4. Touch idle watcher to reset the timer
+    this.idleWatcher?.touch(session.sessionId, session.chatId);
+
+    // 5. Invoke the onPrompt callback to let callers wire the agent
     if (this.onPrompt) {
       await this.onPrompt(session, event);
     }

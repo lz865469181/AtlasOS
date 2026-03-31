@@ -7,6 +7,7 @@ vi.mock('atlas-agent', () => ({
     create: vi.fn(() => ({
       startSession: vi.fn(async () => ({ sessionId: 'agent-s1' })),
       sendPrompt: vi.fn(async () => {}),
+      cancel: vi.fn(async () => {}),
       onMessage: vi.fn(),
       offMessage: vi.fn(),
       dispose: vi.fn(async () => {}),

@@ -21,7 +21,12 @@ const app = createApp({
 
 await app.start();
 
+let shuttingDown = false;
+
 const shutdown = async () => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log('[atlas] Received shutdown signal');
   await app.stop();
   process.exit(0);
 };

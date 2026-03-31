@@ -113,19 +113,60 @@ export class AgentBridge {
   }
 
   /**
+   * Cancel the running agent task for a given gateway session.
+   * Calls agent.cancel() and cancels the CardEngine streaming state machine.
+   * No-ops if session is unknown.
+   */
+  async cancelSession(sessionId: string): Promise<void> {
+    const managed = this.sessions.get(sessionId);
+    if (!managed) return;
+
+    await managed.agent.cancel(managed.agentSessionId);
+
+    // Cancel the CardEngine streaming state machine for this session
+    const sm = this.cardEngine.getStreamingState(sessionId);
+    if (sm) {
+      sm.cancel();
+    }
+  }
+
+  /**
+   * Destroy a managed agent session: cancel, unbind handler, dispose agent
+   * if no other sessions share it, and remove from map.
+   */
+  async destroySession(sessionId: string): Promise<void> {
+    const managed = this.sessions.get(sessionId);
+    if (!managed) return;
+
+    // Cancel first
+    await this.cancelSession(sessionId);
+
+    // Remove from map
+    this.sessions.delete(sessionId);
+
+    // Clean up CardEngine state
+    this.cardEngine.dispose(sessionId);
+
+    // Check if any other session still uses the same agent instance
+    const agentStillUsed = Array.from(this.sessions.values()).some(
+      (s) => s.agent === managed.agent,
+    );
+
+    if (!agentStillUsed) {
+      if (managed.agent.offMessage) {
+        managed.agent.offMessage(managed.handler);
+      }
+      await managed.agent.dispose();
+    }
+  }
+
+  /**
    * Dispose all managed agents: unbind handlers and call dispose.
    */
   async dispose(): Promise<void> {
-    const entries = Array.from(this.sessions.values());
-    this.sessions.clear();
-
-    await Promise.all(
-      entries.map(async (managed) => {
-        if (managed.agent.offMessage) {
-          managed.agent.offMessage(managed.handler);
-        }
-        await managed.agent.dispose();
-      }),
-    );
+    const sessionIds = Array.from(this.sessions.keys());
+    for (const sessionId of sessionIds) {
+      await this.destroySession(sessionId);
+    }
   }
 }

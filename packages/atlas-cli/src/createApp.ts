@@ -16,6 +16,7 @@ import {
   PermissionService,
   CommandRegistryImpl,
   SessionQueue,
+  IdleWatcher,
 } from 'atlas-gateway';
 import type { LarkClient, SenderFactory, CardActionEvent } from 'atlas-gateway';
 
@@ -85,7 +86,25 @@ export function createApp(config: AppConfig): App {
   // 7. Command registry (registers built-in commands by default)
   const commandRegistry = new CommandRegistryImpl();
 
-  // 8. Engine
+  // 8. Idle watcher — sends Feishu notification when a session is idle
+  const IDLE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+  const idleWatcher = new IdleWatcher({
+    timeoutMs: IDLE_TIMEOUT_MS,
+    onIdle: async (sessionId, chatId) => {
+      try {
+        const sender = senderFactory(chatId);
+        await sender.sendText(
+          `Session \`${sessionId}\` has been idle for 10 minutes. Reply \`/takeover ${sessionId}\` to take over.`,
+        );
+      } catch (err) {
+        console.error(
+          JSON.stringify({ time: new Date().toISOString(), level: 'error', msg: 'IdleWatcher.onIdle notification failed', sessionId, chatId, error: String(err) }),
+        );
+      }
+    },
+  });
+
+  // 9. Engine
   const engine = new EngineImpl({
     cardStore,
     correlationStore,
@@ -95,10 +114,12 @@ export function createApp(config: AppConfig): App {
     commandRegistry,
     permissionService,
     senderFactory,
+    bridge,
+    idleWatcher,
     onPrompt: (session, event) => bridge.handlePrompt(session, event),
   });
 
-  // 9. Feishu adapter (created inside start)
+  // 10. Feishu adapter (created inside start)
   let adapter: InstanceType<typeof FeishuAdapter> | null = null;
 
   return {

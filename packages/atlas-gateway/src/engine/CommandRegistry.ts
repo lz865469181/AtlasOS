@@ -4,7 +4,7 @@ import type { ChannelSender } from '../channel/ChannelSender.js';
 // ── Interfaces ──────────────────────────────────────────────────────────────
 
 export interface SessionManagerLike {
-  get(chatId: string): { agentId: string; model?: string; permissionMode: string } | undefined;
+  get(chatId: string): { sessionId: string; agentId: string; model?: string; permissionMode: string; createdAt: number } | undefined;
   switchAgent(chatId: string, agentId: string): Promise<unknown>;
   setModel(chatId: string, model: string): void;
   setPermissionMode(chatId: string, mode: string): void;
@@ -12,10 +12,16 @@ export interface SessionManagerLike {
   listActive(): Array<{ sessionId: string; chatId: string; agentId: string }>;
 }
 
+export interface BridgeLike {
+  cancelSession(sessionId: string): Promise<void>;
+  destroySession(sessionId: string): Promise<void>;
+}
+
 export interface CommandContext {
   chatId: string;
   userId: string;
   sessionManager: SessionManagerLike;
+  bridge: BridgeLike;
   sender: ChannelSender;
 }
 
@@ -32,40 +38,33 @@ export interface CommandRegistry {
   listCommands(): Command[];
 }
 
+import { CancelCommand } from './commands/CancelCommand.js';
+import { StatusCommand } from './commands/StatusCommand.js';
+import { AgentCommand } from './commands/AgentCommand.js';
+import { ModelCommand } from './commands/ModelCommand.js';
+import { ModeCommand } from './commands/ModeCommand.js';
+import { NewCommand } from './commands/NewCommand.js';
+import { TakeoverCommand } from './commands/TakeoverCommand.js';
+
 // ── Built-in commands ───────────────────────────────────────────────────────
 
+const helpCommand: Command = {
+  name: 'help',
+  aliases: ['h', '?'],
+  description: 'Show available commands.',
+  execute: async () =>
+    'Available commands: /agent, /model, /mode, /cancel, /status, /new, /takeover, /help',
+};
+
 const builtinCommands: Command[] = [
-  {
-    name: 'agent',
-    description: 'Switch to a different agent or list available agents.',
-    execute: async () => 'Usage: /agent <agent-id> — switch agent',
-  },
-  {
-    name: 'model',
-    description: 'Switch the AI model for the current session.',
-    execute: async () => 'Usage: /model <model-name> — switch model',
-  },
-  {
-    name: 'mode',
-    description: 'Set the permission mode (auto / confirm / deny).',
-    execute: async () => 'Usage: /mode <auto|confirm|deny> — set permission mode',
-  },
-  {
-    name: 'cancel',
-    description: 'Cancel the currently running agent task.',
-    execute: async () => 'Task cancelled.',
-  },
-  {
-    name: 'status',
-    description: 'Show the current session status.',
-    execute: async () => 'No active session.',
-  },
-  {
-    name: 'help',
-    aliases: ['h', '?'],
-    description: 'Show available commands.',
-    execute: async () => 'Available commands: /agent, /model, /mode, /cancel, /status, /help',
-  },
+  AgentCommand,
+  ModelCommand,
+  ModeCommand,
+  CancelCommand,
+  StatusCommand,
+  NewCommand,
+  TakeoverCommand,
+  helpCommand,
 ];
 
 // ── Implementation ──────────────────────────────────────────────────────────

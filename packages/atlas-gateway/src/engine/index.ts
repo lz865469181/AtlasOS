@@ -35,7 +35,7 @@ export { SessionManagerImpl } from './SessionManager.js';
 export type { SessionManager, SessionInfo, SerializedSessionStore } from './SessionManager.js';
 
 export { CommandRegistryImpl } from './CommandRegistry.js';
-export type { CommandRegistry, Command, CommandContext, SessionManagerLike } from './CommandRegistry.js';
+export type { CommandRegistry, Command, CommandContext, SessionManagerLike, BridgeLike } from './CommandRegistry.js';
 
 export { EngineImpl } from './Engine.js';
 export type { Engine, EngineDeps, CardActionEvent, OnPromptCallback } from './Engine.js';
@@ -47,3 +47,16 @@ export type { AgentBridgeDeps } from './AgentBridge.js';
 
 export { PermissionService } from './PermissionService.js';
 export type { PermissionServiceDeps } from './PermissionService.js';
+
+export { IdleWatcher } from './IdleWatcher.js';
+export type { IdleWatcherConfig } from './IdleWatcher.js';
+
+export {
+  CancelCommand,
+  StatusCommand,
+  AgentCommand,
+  ModelCommand,
+  ModeCommand,
+  NewCommand,
+  TakeoverCommand,
+} from './commands/index.js';
