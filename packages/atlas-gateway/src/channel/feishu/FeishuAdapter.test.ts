@@ -8,11 +8,13 @@ import {
   isStaleMessage,
   type FeishuAdapterConfig,
   type FeishuMessageEvent,
+  type FeishuCardActionEvent,
   type LarkClient,
   type LarkWSClient,
 } from './FeishuAdapter.js';
 import type { ChannelEvent } from '../channelEvent.js';
 import type { CardModel } from '../../cards/CardModel.js';
+import type { CardActionEvent } from '../../engine/Engine.js';
 
 // ── Mock helpers ─────────────────────────────────────────────────────────
 
@@ -637,6 +639,131 @@ describe('FeishuAdapter', () => {
     it('start without factories logs warning and returns', async () => {
       const handler = vi.fn();
       await expect(adapter.start(handler)).resolves.toBeUndefined();
+    });
+  });
+
+  describe('card action handling', () => {
+    function makeCardActionEvent(overrides?: Partial<FeishuCardActionEvent>): FeishuCardActionEvent {
+      return {
+        operator: { open_id: overrides?.operator?.open_id ?? 'ou_actor1' },
+        action: overrides?.action ?? { value: { action: 'approve', requestId: 'r1' }, tag: 'button' },
+        token: overrides?.token ?? 'tok_123',
+        open_message_id: overrides?.open_message_id ?? 'om_msg_001',
+        open_chat_id: overrides?.open_chat_id ?? 'oc_chat_001',
+      };
+    }
+
+    it('registers card.action.trigger in EventDispatcher', async () => {
+      let capturedHandlers: Record<string, (data: unknown) => Promise<unknown>> = {};
+      const onCardAction = vi.fn().mockResolvedValue(undefined);
+
+      const adapterWithCard = new FeishuAdapter({
+        config,
+        larkClient: mockClient,
+        wsClientFactory: () => ({
+          start: vi.fn().mockResolvedValue(undefined),
+          close: vi.fn(),
+        }),
+        eventDispatcherFactory: (handlers) => {
+          capturedHandlers = handlers;
+          return handlers;
+        },
+        onCardAction,
+      });
+
+      await adapterWithCard.start(vi.fn());
+      expect(capturedHandlers).toHaveProperty('card.action.trigger');
+    });
+
+    it('converts FeishuCardActionEvent to CardActionEvent and calls onCardAction', async () => {
+      let capturedHandlers: Record<string, (data: unknown) => Promise<unknown>> = {};
+      const onCardAction = vi.fn().mockResolvedValue(undefined);
+
+      const adapterWithCard = new FeishuAdapter({
+        config,
+        larkClient: mockClient,
+        wsClientFactory: () => ({
+          start: vi.fn().mockResolvedValue(undefined),
+          close: vi.fn(),
+        }),
+        eventDispatcherFactory: (handlers) => {
+          capturedHandlers = handlers;
+          return handlers;
+        },
+        onCardAction,
+      });
+
+      await adapterWithCard.start(vi.fn());
+
+      const feishuEvent = makeCardActionEvent();
+      await capturedHandlers['card.action.trigger']!(feishuEvent);
+
+      expect(onCardAction).toHaveBeenCalledTimes(1);
+      expect(onCardAction).toHaveBeenCalledWith({
+        messageId: 'om_msg_001',
+        chatId: 'oc_chat_001',
+        userId: 'ou_actor1',
+        value: { action: 'approve', requestId: 'r1' },
+      } satisfies CardActionEvent);
+    });
+
+    it('ignores card action with missing fields', async () => {
+      let capturedHandlers: Record<string, (data: unknown) => Promise<unknown>> = {};
+      const onCardAction = vi.fn().mockResolvedValue(undefined);
+
+      const adapterWithCard = new FeishuAdapter({
+        config,
+        larkClient: mockClient,
+        wsClientFactory: () => ({
+          start: vi.fn().mockResolvedValue(undefined),
+          close: vi.fn(),
+        }),
+        eventDispatcherFactory: (handlers) => {
+          capturedHandlers = handlers;
+          return handlers;
+        },
+        onCardAction,
+      });
+
+      await adapterWithCard.start(vi.fn());
+
+      // Missing open_chat_id
+      const incompleteEvent = makeCardActionEvent();
+      delete (incompleteEvent as Record<string, unknown>).open_chat_id;
+      await capturedHandlers['card.action.trigger']!(incompleteEvent);
+
+      expect(onCardAction).not.toHaveBeenCalled();
+    });
+
+    it('does not register card.action.trigger when onCardAction is not provided', async () => {
+      let capturedHandlers: Record<string, (data: unknown) => Promise<unknown>> = {};
+
+      const adapterNoCard = new FeishuAdapter({
+        config,
+        larkClient: mockClient,
+        wsClientFactory: () => ({
+          start: vi.fn().mockResolvedValue(undefined),
+          close: vi.fn(),
+        }),
+        eventDispatcherFactory: (handlers) => {
+          capturedHandlers = handlers;
+          return handlers;
+        },
+      });
+
+      await adapterNoCard.start(vi.fn());
+      expect(capturedHandlers).not.toHaveProperty('card.action.trigger');
+    });
+
+    it('toCardActionEvent returns null when value is not an object', () => {
+      const event: FeishuCardActionEvent = {
+        operator: { open_id: 'ou_1' },
+        action: { value: 'string_value' },
+        open_message_id: 'om_1',
+        open_chat_id: 'oc_1',
+      };
+      const result = adapter.toCardActionEvent(event);
+      expect(result).toBeNull();
     });
   });
 });

@@ -2,6 +2,7 @@ import type { ChannelAdapter, MessageHandler } from '../ChannelAdapter.js';
 import type { ChannelSender } from '../ChannelSender.js';
 import type { ChannelEvent } from '../channelEvent.js';
 import type { CardModel } from '../../cards/CardModel.js';
+import type { CardActionEvent } from '../../engine/Engine.js';
 import { FeishuCardRenderer } from './FeishuCardRenderer.js';
 
 // ── Configuration ────────────────────────────────────────────────────────
@@ -352,6 +353,7 @@ export class FeishuAdapter implements ChannelAdapter {
   private readonly renderer: FeishuCardRenderer;
   private readonly dedup: DedupSet;
   private readonly maxAgeMs: number;
+  private readonly onCardAction?: (event: CardActionEvent) => Promise<void>;
 
   private wsClient: LarkWSClient | null = null;
 
@@ -361,6 +363,7 @@ export class FeishuAdapter implements ChannelAdapter {
     wsClientFactory?: WSClientFactory;
     eventDispatcherFactory?: EventDispatcherFactory;
     renderer?: FeishuCardRenderer;
+    onCardAction?: (event: CardActionEvent) => Promise<void>;
   }) {
     this.config = opts.config;
     this.larkClient = opts.larkClient;
@@ -369,6 +372,7 @@ export class FeishuAdapter implements ChannelAdapter {
     this.renderer = opts.renderer ?? new FeishuCardRenderer();
     this.dedup = new DedupSet(opts.config.dedupMax ?? 1000);
     this.maxAgeMs = opts.config.maxAgeMs ?? 2 * 60 * 1000;
+    this.onCardAction = opts.onCardAction;
   }
 
   async start(handler: MessageHandler): Promise<void> {
@@ -381,6 +385,19 @@ export class FeishuAdapter implements ChannelAdapter {
         }
       },
     };
+
+    if (this.onCardAction) {
+      handlers['card.action.trigger'] = async (data: unknown) => {
+        try {
+          const cardEvent = this.toCardActionEvent(data as FeishuCardActionEvent);
+          if (cardEvent && this.onCardAction) {
+            await this.onCardAction(cardEvent);
+          }
+        } catch (err) {
+          log('error', 'Error handling card action', { error: String(err) });
+        }
+      };
+    }
 
     // Create event dispatcher
     let eventDispatcher: unknown;
@@ -453,6 +470,19 @@ export class FeishuAdapter implements ChannelAdapter {
     }
 
     await handler(event);
+  }
+
+  /**
+   * Convert a raw Feishu card action event into a CardActionEvent.
+   * Returns null if required fields are missing or value is not an object.
+   */
+  toCardActionEvent(data: FeishuCardActionEvent): CardActionEvent | null {
+    const messageId = data.open_message_id;
+    const chatId = data.open_chat_id;
+    const userId = data.operator?.open_id;
+    const value = data.action?.value;
+    if (!messageId || !chatId || !userId || !value || typeof value !== 'object') return null;
+    return { messageId, chatId, userId, value: value as Record<string, unknown> };
   }
 
   /**
