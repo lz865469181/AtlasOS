@@ -39,3 +39,11 @@ export type { CommandRegistry, Command, CommandContext, SessionManagerLike } fro
 
 export { EngineImpl } from './Engine.js';
 export type { Engine, EngineDeps, CardActionEvent, OnPromptCallback } from './Engine.js';
+
+export { SessionQueue, sessionKey } from './SessionQueue.js';
+
+export { AgentBridge } from './AgentBridge.js';
+export type { AgentBridgeDeps } from './AgentBridge.js';
+
+export { PermissionService } from './PermissionService.js';
+export type { PermissionServiceDeps } from './PermissionService.js';
