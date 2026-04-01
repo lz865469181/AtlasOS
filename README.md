@@ -1,515 +1,329 @@
-# Feishu AI Assistant
+# Feishu AI Assistant (Atlas AI)
 
-> Bridge any AI coding CLI (Claude, Codex, Gemini, Cursor, OpenCode) to Feishu/Lark as a team chatbot, with streaming responses, interactive permission cards, and multi-platform support.
+> Bridge Claude AI to Feishu/Lark and DingTalk as a team chatbot, with streaming responses, interactive permission cards, idle session notifications, and multi-channel support.
 
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-green)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)](https://www.typescriptlang.org/)
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 
-## Why?
-
-You already use Claude Code (or Codex, Gemini CLI, etc.) locally. Your team uses Feishu. This project turns your local AI CLI into a shared Feishu bot — anyone in your org can chat with it, and you get streaming responses, tool-use notifications, interactive permission cards, and per-user conversation sessions.
-
 ## Features
 
-- **5 Agent Backends** — Claude Code, OpenAI Codex, Google Gemini CLI, Cursor, OpenCode
-- **4 Platform Channels** — Feishu (primary), Telegram, Discord, DingTalk
-- **Streaming Responses** — Real-time token streaming with configurable preview intervals
-- **Interactive Permission Cards** — Tool calls require explicit Allow / Deny approval via Feishu cards
-- **Per-User Sessions** — Isolated conversation history, workspace files, and memory per user
-- **Slash Commands** — Built-in `/sessions`, `/resume`, `/workspace` with prefix matching and custom prompt commands
-- **Session Queue** — Messages from the same user are serialized; different users run concurrently
-- **Rate Limiting & RBAC** — Sliding-window rate limits with admin/user/guest roles
-- **Cron Scheduler** — Schedule recurring tasks with standard cron expressions
-- **WebUI Console** — Live monitor, config editor, and secrets management at `http://127.0.0.1:20263`
-- **Per-User Workspace** — Each user gets `CLAUDE.md`, `MEMORY.md`, `USER.md` under `~/.atlasOS/agents/{id}/users/{uid}/`
+- **Claude AI Backend** — Anthropic SDK with streaming (`client.messages.stream()`)
+- **Multi-Channel** — Feishu/Lark (WebSocket) + DingTalk (Stream/Webhook)
+- **Streaming Responses** — Real-time token streaming via interactive cards
+- **Interactive Permission Cards** — Tool calls require Allow / Deny approval
+- **Per-Chat Sessions** — Isolated conversation history per chat
+- **Idle Session Notifications** — Rich context (agent, last message, session age) when sessions go idle
+- **Slash Commands** — `/new`, `/stop`, `/model`, `/sessions`, etc.
+- **Session Queue** — Messages from the same chat serialized; different chats run concurrently
+- **Pluggable Agent Registry** — Register new AI backends with `agentRegistry.register(id, factory)`
 
-## Architecture
+## Architecture (v2 Monorepo)
 
 ```
-                          ┌────────────────────────────────────┐
-                          │             Engine                  │
-                          │  ┌──────────┐  ┌────────────────┐  │
-  Feishu  ──WebSocket──►  │  │ Commands │  │ SessionManager │  │
-  Telegram ─Polling────►  │  │ Registry │  │  + Queue       │  │
-  Discord  ─Gateway────►  │  └──────────┘  └───────┬────────┘  │
-  DingTalk ─Webhook────►  │                        │            │
-                          │          ┌─────────────▼──────┐     │
-                          │          │   Agent Backend     │     │
-                          │          │ (Claude/Codex/...)  │     │
-                          │          └─────────────────────┘     │
-                          └────────────────────────────────────┘
-                                          │
-                              AgentEvent stream (text, thinking,
-                              tool_use, permission_request, result)
-                                          │
-                                          ▼
-                                 PlatformSender
-                            (sendText / sendMarkdown /
-                             sendInteractiveCard)
+packages/
+├── atlas-wire/        # Shared types and schemas (zod)
+├── atlas-agent/       # Agent abstraction + Claude backend
+│   └── backends/claude/  # Anthropic SDK integration
+├── atlas-gateway/     # Engine, sessions, channels, cards, commands
+├── atlas-app-logs/    # Structured logging
+└── atlas-cli/         # Entry point (wires everything together)
 ```
 
-**Key design decisions:**
+```
+                      ┌─────────────────────────────────────┐
+                      │            Engine (gateway)          │
+                      │  ┌──────────┐  ┌────────────────┐   │
+Feishu ──WebSocket──► │  │ Commands │  │ SessionManager │   │
+DingTalk ─Stream────► │  │ Registry │  │  + IdleWatcher │   │
+                      │  └──────────┘  └───────┬────────┘   │
+                      │                        │             │
+                      │          ┌─────────────▼──────┐      │
+                      │          │   AgentBridge       │      │
+                      │          │   → AgentRegistry   │      │
+                      │          │   → ClaudeBackend   │      │
+                      │          └─────────────────────┘      │
+                      └─────────────────────────────────────┘
+```
 
-- **Engine orchestrator** — Central `Engine` class replaces flat routing; manages platforms, sessions, and message dispatch
-- **Stateless CLI** — No session file locks; conversation history injected via `--append-system-prompt`
-- **Agent/Session factory** — Pluggable backends via registry pattern; each backend spawns CLI as child process
-- **Streaming event protocol** — Unified `AgentEvent` types: `text`, `thinking`, `tool_use`, `tool_result`, `permission_request`, `result`, `error`
+**How it works:**
+
+1. Feishu/DingTalk message arrives via WebSocket/Stream
+2. `Engine.handleChannelEvent()` routes to command or agent
+3. `SessionManager` creates/retrieves per-chat session
+4. `AgentBridge` delegates to `ClaudeBackend` via `agentRegistry`
+5. `ClaudeBackend` calls Anthropic `messages.stream()` API
+6. Streaming tokens flow back through `CardRenderPipeline` → channel sender
+7. `IdleWatcher` fires rich context notifications when sessions go idle
 
 ## Quick Start
 
-### One-Click Setup (Recommended)
+See [INSTALL.md](./INSTALL.md) for detailed step-by-step instructions.
 
 ```bash
+# 1. Clone and install
 git clone https://github.com/lz865469181/AtlasOS.git feishu-ai-assistant
 cd feishu-ai-assistant
+yarn install
 
-# macOS / Linux
-bash scripts/setup.sh
+# 2. Configure
+cp .env.example .env
+# Edit .env with your credentials (see Configuration section below)
 
-# Windows
-scripts\setup.cmd
+# 3. Build and run
+yarn build
+yarn start
 ```
 
-The script installs dependencies, builds, prompts for Feishu credentials, and starts the service in background via PM2. See [INSTALL.md](./INSTALL.md) for full details.
+## Configuration
 
-### Prerequisites
+### Option A: Environment Variables (`.env`)
 
-- **Node.js** >= 18
-- **One AI CLI** installed and authenticated (e.g., `claude` in PATH)
-- **Feishu Developer App** with bot capability ([create one here](https://open.feishu.cn/app))
-
-### Manual Setup
-
-#### 1. Clone and install
+Create a `.env` file at the project root:
 
 ```bash
-git clone https://github.com/lz865469181/AtlasOS.git feishu-ai-assistant
-cd feishu-ai-assistant
-npm install
-```
-
-### 2. Configure credentials
-
-On first run, the app auto-creates `~/.atlasOS/.env` and `~/.atlasOS/config.json`. Edit `~/.atlasOS/.env`:
-
-```bash
+# ── Required: Feishu/Lark bot credentials ──
 FEISHU_APP_ID=cli_xxxxxxxxxxxx
 FEISHU_APP_SECRET=your_app_secret_here
-# Optional: for API-mode agents
-ANTHROPIC_API_KEY=your_api_key
+
+# ── Required: Anthropic API key ──
+ANTHROPIC_API_KEY=sk-ant-api03-xxxxxxxxxxxx
+
+# ── Optional: DingTalk (if using DingTalk channel) ──
+DINGTALK_APP_KEY=your_dingtalk_app_key
+DINGTALK_APP_SECRET=your_dingtalk_app_secret
+DINGTALK_MODE=stream    # stream or webhook
+
+# ── Optional: Claude model configuration ──
+CLAUDE_MODEL=claude-sonnet-4-6          # default model
+CLAUDE_MAX_TOKENS=8192                    # max response tokens
+CLAUDE_SYSTEM_PROMPT=You are a helpful assistant.
+
+# ── Optional: Agent settings ──
+AGENT_CWD=.                               # working directory for agent
+ATLAS_IDLE_TIMEOUT=600000                  # idle notification timeout (ms, default 10min)
+ATLAS_LOG_LEVEL=info                       # debug | info | warn | error
 ```
 
-Get Feishu credentials from [Feishu Open Platform](https://open.feishu.cn/app) > Your App > Credentials.
+### Option B: Config File (`atlas.config.json`)
 
-### 3. Choose your agent backend
+Create `atlas.config.json` at the project root for richer configuration:
 
-Edit `~/.atlasOS/config.json`:
-
-```jsonc
+```json
 {
-  "agent": {
-    "backend": "claude",       // or "codex", "gemini", "cursor", "opencode"
-    "cli_path": "claude",      // path to CLI executable
-    "timeout": 120,
-    "max_retries": 3
-  }
-}
-```
-
-### 4. Run
-
-```bash
-# Development (hot-reload)
-npm run dev
-
-# Production
-npm run build && npm start
-```
-
-### 5. Verify
-
-You should see:
-
-```
-{"level":"info","msg":"Configuration loaded"}
-{"level":"info","msg":"Workspace initialized"}
-{"level":"info","msg":"Engine started","platforms":["feishu"],"webui":"http://127.0.0.1:20263"}
-```
-
-Send a message to your bot in Feishu. It will reply with the AI's response.
-
-## Feishu App Setup
-
-1. Go to [Feishu Open Platform](https://open.feishu.cn/app) and create an Enterprise App
-2. **Add Bot capability**: App Features > Bot
-3. **Subscribe to events**: Event Subscriptions > Add `im.message.receive_v1`
-4. **Permissions**: grant `im:message`, `im:message:readonly`, `im:message.reactions:write`
-5. **Connection method**: Event Subscriptions > choose **WebSocket** (not HTTP callback)
-6. **Publish** the app and approve it in your organization
-
-## Bot Commands (Feishu Slash Commands)
-
-Send these commands to the bot in Feishu:
-
-**Session & Conversation**
-
-| Command | Aliases | Description |
-|---------|---------|-------------|
-| `/new` | `/reset` | Create new session (clear current context) |
-| `/stop` | | Stop current agent execution |
-| `/compress` | `/compact` | Compress context by resetting session |
-| `/history` | | Show session history summary |
-| `/model` | `/m` | Switch AI model or list available models |
-
-**Parked Sessions (beam-flow)**
-
-| Command | Aliases | Description |
-|---------|---------|-------------|
-| `/sessions` | `/ss` | List all parked CLI sessions |
-| `/list` | `/ls` | List parked sessions (alias for /sessions) |
-| `/resume <name>` | `/rs` | Resume a parked session |
-| `/switch <name>` | `/sw` | Switch to a parked session |
-| `/delete <name>` | `/del`, `/rm` | Delete a parked session |
-
-**Workspace (multi-workspace mode)**
-
-| Command | Aliases | Description |
-|---------|---------|-------------|
-| `/workspace` | `/ws` | Show current workspace binding |
-| `/workspace bind <name>` | | Bind chat to a workspace folder |
-| `/workspace init <git-url>` | | Clone a repo and bind as workspace |
-| `/workspace unbind` | | Remove workspace binding |
-| `/workspace list` | | List all workspace bindings |
-
-**Utility**
-
-| Command | Aliases | Description |
-|---------|---------|-------------|
-| `/help` | `/h` | List all available commands |
-| `/status` | | Show server and session status |
-| `/whoami` | `/myid` | Show your user ID and platform info |
-| `/version` | `/ver` | Show application version |
-
-> Commands support prefix matching — e.g. `/mod` resolves to `/model` if unambiguous.
-
-## Bridging Local Claude CLI Sessions to Feishu
-
-This is the core use case: you run Claude Code locally, and your team interacts with it through Feishu.
-
-### How It Works
-
-```
-Your machine                              Feishu
-┌─────────────────────┐                  ┌──────────────┐
-│  feishu-ai-assistant │◄──WebSocket───► │  Feishu Bot   │
-│  (Node.js server)    │                 │  (your app)   │
-│         │            │                 └──────────────┘
-│         ▼            │                        ▲
-│  ┌──────────────┐    │                        │
-│  │ claude -p    │    │     Streaming text,     │
-│  │ (child proc) │────┼───► tool cards, ────────┘
-│  └──────────────┘    │     permission prompts
-└─────────────────────┘
-```
-
-### Step-by-Step Setup
-
-#### Step 1: Install Claude Code CLI
-
-```bash
-# Install globally
-npm install -g @anthropic-ai/claude-code
-
-# Verify installation
-claude --version
-
-# Authenticate (one-time)
-claude auth login
-```
-
-#### Step 2: Configure the Bridge
-
-Your `~/.atlasOS/config.json` should have:
-
-```jsonc
-{
-  "agent": {
-    "backend": "claude",
-    "cli_path": "claude",          // or absolute path like "/usr/local/bin/claude"
-    "timeout": 120,
-    "max_retries": 3,
-    "workspace_root": "~/.atlasOS" // where per-user data lives
-  },
   "channels": {
     "feishu": {
-      "app_id": "${FEISHU_APP_ID}",
-      "app_secret": "${FEISHU_APP_SECRET}",
-      "enabled": true
+      "appId": "cli_xxxxxxxxxxxx",
+      "appSecret": "your_app_secret_here"
+    },
+    "dingtalk": {
+      "appKey": "your_dingtalk_app_key",
+      "appSecret": "your_dingtalk_app_secret",
+      "mode": "stream"
     }
   },
-  "gateway": {
-    "max_sessions": 200,
-    "session_ttl": "30m",
-    "context_compression_threshold": 100000
-  }
+  "agent": {
+    "cwd": ".",
+    "env": {
+      "ANTHROPIC_API_KEY": "sk-ant-api03-xxxxxxxxxxxx",
+      "CLAUDE_MODEL": "claude-sonnet-4-6",
+      "CLAUDE_MAX_TOKENS": "8192",
+      "CLAUDE_SYSTEM_PROMPT": "You are a helpful assistant."
+    },
+    "defaultAgent": "claude",
+    "defaultPermissionMode": "auto"
+  },
+  "idleTimeoutMs": 600000,
+  "logLevel": "info"
 }
 ```
 
-#### Step 3: Start the Server
+**Config resolution order:** `atlas.config.json` → `.env` → runtime overrides (later wins).
 
-```bash
-npm run dev
-```
+### Environment Variable → Config Mapping
 
-The server connects to Feishu via WebSocket and begins listening for messages.
+| Environment Variable | Config Path | Description |
+|---------------------|-------------|-------------|
+| `FEISHU_APP_ID` | `channels.feishu.appId` | Feishu bot App ID |
+| `FEISHU_APP_SECRET` | `channels.feishu.appSecret` | Feishu bot App Secret |
+| `DINGTALK_APP_KEY` | `channels.dingtalk.appKey` | DingTalk App Key |
+| `DINGTALK_APP_SECRET` | `channels.dingtalk.appSecret` | DingTalk App Secret |
+| `DINGTALK_MODE` | `channels.dingtalk.mode` | `stream` or `webhook` |
+| `AGENT_CWD` | `agent.cwd` | Agent working directory |
+| `AGENT_DEFAULT_AGENT` | `agent.defaultAgent` | Default agent ID (default: `claude`) |
+| `AGENT_DEFAULT_MODEL` | `agent.defaultModel` | Default model override |
+| `AGENT_PERMISSION_MODE` | `agent.defaultPermissionMode` | `auto` / `confirm` / `deny` |
+| `ATLAS_IDLE_TIMEOUT` | `idleTimeoutMs` | Idle notification timeout in ms |
+| `ATLAS_LOG_LEVEL` | `logLevel` | Log level |
 
-#### Step 4: Chat in Feishu
+### Claude Backend Environment Variables
 
-1. Open Feishu and find your bot (by the app name you configured)
-2. Send any message — the bot spawns a `claude -p` child process
-3. Claude's response streams back to Feishu in real time
-4. If Claude wants to use a tool (e.g., run a bash command), you'll see an **interactive permission card**:
-
-   ```
-   ┌─────────────────────────────────┐
-   │  🔧 Tool Permission Request     │
-   │                                  │
-   │  bash: rm -rf /tmp/cache        │
-   │                                  │
-   │  [Allow]  [Deny]  [Allow All]   │
-   └─────────────────────────────────┘
-   ```
-
-5. Click **Allow** or **Deny** directly in Feishu
-6. The conversation continues with full context
-
-#### Step 5: Session Management
-
-- Each Feishu user gets an **isolated session** with their own conversation history
-- Sessions expire after the configured TTL (default 30 minutes)
-- Use `/reset` in Feishu to clear your session and start fresh
-- Use `/model` to switch between agent backends on the fly
-
-#### Step 6: Per-User Workspace
-
-Each user's workspace lives at:
-
-```
-~/.atlasOS/agents/{agent-id}/users/{feishu-user-id}/
-├── CLAUDE.md     # Project instructions (persists across sessions)
-├── MEMORY.md     # Conversation memory
-└── USER.md       # User preferences
-```
-
-You can pre-populate `CLAUDE.md` with project-specific instructions.
-
-### Tips for Team Usage
-
-- **Rate limits**: Configure `access_control.rate_limit` to prevent abuse (default: 30 msgs/min)
-- **Admin list**: Add trusted users to `access_control.admin_list` for unrestricted access
-- **Multiple backends**: Switch backends by changing `agent.backend` in `~/.atlasOS/config.json`
-- **Cron tasks**: Schedule recurring prompts (e.g., daily standup summaries) via `~/.atlasOS/config.json`
-
-## beam-flow: Park & Resume Sessions from Feishu
-
-Start a Claude CLI session locally, "park" it, then list and resume it from Feishu — so you can switch from your terminal to mobile/desktop Feishu without losing context.
-
-### Quick Example
-
-```
-PowerShell:
-> npm run beam start fix-the-damn-bug
-  Starting Claude session 'fix-the-damn-bug' (id: a1b2c3...)
-  [normal interactive Claude CLI]
-  > /exit
-  Park now? [Y/n] y
-  Parked 'fix-the-damn-bug'! In Feishu, type: /sessions
-
-Feishu:
-> /sessions
-  Parked Sessions
-  1. fix-the-damn-bug (2m ago)
-  To resume: /resume <name>
-
-> /resume fix-the-damn-bug
-  Resumed session 'fix-the-damn-bug'! Claude remembers your conversation.
-  Send a message to continue.
-```
-
-### CLI Commands
-
-| Command | Description |
-|---------|-------------|
-| `npm run beam start <name>` | Start Claude CLI with session tracking. Sets `BEAM_SESSION_ID` and `BEAM_SESSION_NAME` env vars. On exit, offers to auto-park. |
-| `npm run beam park [name]` | Park the current session (reads env vars from `start`). Registers it with the server for Feishu access. |
-| `npm run beam sessions` | List all parked sessions (alias: `ls`). |
-| `npm run beam drop <name>` | Remove a parked session (alias: `rm`). |
-
-### How It Works
-
-```
-beam-flow CLI                    feishu-ai-assistant server
-┌──────────────┐                ┌─────────────────────────┐
-│ start <name> │                │ POST /api/beam/park      │
-│  - spawn     │                │ GET  /api/beam/sessions  │
-│    claude    │  park ──HTTP──►│ DEL  /api/beam/sessions/ │
-│  - set env   │                │          │                │
-│    vars      │                │   ParkedSessionStore      │
-└──────────────┘                │   (parked.json)           │
-                                │          │                │
-                                │   Engine.resumeSession()  │
-                                │   /sessions → list        │
-                                │   /resume   → startSession│
-                                │              (--session-id)│
-                                └─────────────────────────┘
-```
-
-1. `beam-flow start` spawns `claude --session-id <uuid>` and binds the UUID to your shell via env vars
-2. `beam-flow park` reads env vars and POSTs to the server's `/api/beam/park` endpoint
-3. In Feishu, `/sessions` lists parked sessions; `/resume` calls `Engine.resumeSession()` which starts a new agent session using the same Claude CLI session UUID
-4. Claude CLI's built-in session persistence means the full conversation history is available
-
-### Environment Variables
+These are passed to the Claude backend via `agent.env`:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `BEAM_SERVER_URL` | `http://127.0.0.1:20263` | Server URL for beam-flow API calls |
-| `CLAUDE_CLI_PATH` | `claude` | Path to the Claude CLI executable |
-| `BEAM_SESSION_ID` | *(set by start)* | Auto-set by `beam-flow start`, used by `park` |
-| `BEAM_SESSION_NAME` | *(set by start)* | Auto-set by `beam-flow start`, used by `park` |
+| `ANTHROPIC_API_KEY` | — | **Required.** Anthropic API key |
+| `CLAUDE_MODEL` | `claude-sonnet-4-6` | Model to use |
+| `CLAUDE_MAX_TOKENS` | `8192` | Max response tokens |
+| `CLAUDE_SYSTEM_PROMPT` | *(none)* | System prompt for all conversations |
 
-### REST API
+## Feishu App Setup
 
-These endpoints are CSRF-exempted and localhost-only:
+1. Go to [Feishu Open Platform](https://open.feishu.cn/app) > Create Enterprise App
+2. **Add Bot capability**: App Features > Bot
+3. **Subscribe to events**: Event Subscriptions > Add `im.message.receive_v1`
+4. **Permissions**: grant `im:message`, `im:message:readonly`
+5. **Connection method**: Event Subscriptions > choose **WebSocket**
+6. **Publish** the app and approve it in your organization
 
-| Method | Endpoint | Body | Response |
-|--------|----------|------|----------|
-| `POST` | `/api/beam/park` | `{ name, cliSessionId }` | `{ ok: true }` |
-| `GET` | `/api/beam/sessions` | — | `ParkedSession[]` |
-| `DELETE` | `/api/beam/sessions/:name` | — | `{ ok: removed }` |
+## Bot Commands
 
-## Multi-Platform Support
+| Command | Aliases | Description |
+|---------|---------|-------------|
+| `/new` | `/reset` | Create new session (clear context) |
+| `/stop` | — | Stop current agent execution |
+| `/sessions` | `/ss` | List active sessions |
+| `/resume <name>` | `/rs` | Resume a parked session |
+| `/model` | `/m` | Switch AI model |
+| `/help` | `/h` | List available commands |
+| `/status` | — | Show server and session status |
 
-Enable additional platforms in `config.json`:
+## Development
 
-```jsonc
-{
-  "channels": {
-    "feishu":   { "enabled": true,  "app_id": "...", "app_secret": "..." },
-    "telegram": { "enabled": false, "bot_token": "..." },
-    "discord":  { "enabled": false, "bot_token": "..." },
-    "dingtalk": { "enabled": false, "app_key": "...", "app_secret": "..." }
-  }
+### Monorepo Commands
+
+```bash
+# Install all workspace dependencies
+yarn install
+
+# Build all packages (dependency-ordered)
+yarn build
+
+# Run all tests
+yarn test
+
+# Dev mode (atlas-gateway with hot reload)
+yarn dev
+
+# Start the service
+yarn start
+
+# Build/test individual packages
+yarn workspace atlas-agent build
+yarn workspace atlas-agent test
+yarn workspace atlas-gateway test
+```
+
+### Package Overview
+
+| Package | Description |
+|---------|-------------|
+| `atlas-wire` | Shared types, zod schemas |
+| `atlas-agent` | `AgentBackend` interface + `ClaudeBackend` implementation |
+| `atlas-gateway` | Engine, channels (Feishu/DingTalk), cards, sessions, commands |
+| `atlas-app-logs` | Structured JSON logging |
+| `atlas-cli` | Entry point — wires agent + gateway + config, starts the service |
+
+### Adding a New Agent Backend
+
+1. Create `packages/atlas-agent/src/backends/myagent/MyAgentBackend.ts` implementing `AgentBackend`
+2. Create `packages/atlas-agent/src/backends/myagent/index.ts`:
+   ```typescript
+   import { agentRegistry } from '../../core/AgentRegistry.js';
+   import { MyAgentBackend } from './MyAgentBackend.js';
+   agentRegistry.register('myagent', (opts) => new MyAgentBackend(opts));
+   ```
+3. Import in `packages/atlas-agent/src/backends/index.ts`:
+   ```typescript
+   import './claude/index.js';
+   import './myagent/index.js';  // add this
+   ```
+4. The new backend auto-registers on import — use it by setting `defaultAgent: "myagent"` in config
+
+### Key Interfaces
+
+```typescript
+// AgentBackend — implement this for new AI providers
+interface AgentBackend {
+  startSession(): Promise<{ sessionId: string }>;
+  sendPrompt(sessionId: string, prompt: string): Promise<void>;
+  cancel(sessionId: string): Promise<void>;
+  onMessage(handler: (msg: AgentMessage) => void): void;
+  offMessage?(handler: (msg: AgentMessage) => void): void;
+  dispose(): Promise<void>;
 }
+
+// AgentMessage — emitted during streaming
+type AgentMessage =
+  | { type: 'model-output'; textDelta?: string; fullText?: string }
+  | { type: 'status'; status: 'starting' | 'running' | 'idle' | 'stopped' | 'error'; detail?: string }
+  | { type: 'tool-use'; toolName: string; input: unknown }
+  | { type: 'permission-request'; ... }
+  | { type: 'result'; text: string };
 ```
-
-Each platform adapter implements the same `PlatformAdapter` interface, so all features (streaming, cards, permissions) work across platforms.
-
-## Project Structure
-
-```
-src/
-├── index.ts                     # Entry point, wiring, graceful shutdown
-├── config.ts                    # Load config.json + .env, expand ${ENV_VAR}
-├── agent/
-│   ├── registry.ts              # Agent backend registry (factory pattern)
-│   ├── types.ts                 # Agent/AgentSession interfaces
-│   ├── claude/                  # Claude Code CLI backend
-│   ├── codex/                   # OpenAI Codex CLI backend
-│   ├── gemini/                  # Google Gemini CLI backend
-│   ├── cursor/                  # Cursor CLI backend
-│   └── opencode/                # OpenCode CLI backend
-├── core/
-│   ├── engine.ts                # Central orchestrator (Engine class)
-│   ├── interfaces.ts            # Shared types (Agent, PlatformAdapter, AgentEvent, etc.)
-│   ├── cards.ts                 # Platform-agnostic card builder
-│   ├── permission.ts            # Interactive permission system (multilingual)
-│   ├── error.ts                 # Error classification (retryable, auth, rate-limit, etc.)
-│   ├── dedup.ts                 # Message deduplication
-│   ├── ratelimit.ts             # Sliding-window rate limiter + RBAC
-│   ├── cron.ts                  # Cron expression parser and scheduler
-│   ├── logger.ts                # Structured JSON logger with token redaction
-│   ├── utils.ts                 # Token estimation, line iterators
-│   ├── command/
-│   │   └── registry.ts          # Slash command registry with prefix matching
-│   └── session/
-│       ├── manager.ts           # Session lifecycle (TTL, cleanup)
-│       └── queue.ts             # Per-session serial async queue
-├── platform/
-│   ├── registry.ts              # Platform adapter registry
-│   ├── types.ts                 # Capability interfaces (InlineButton, Image, File, Audio, Typing)
-│   ├── feishu/
-│   │   ├── adapter.ts           # Feishu WebSocket adapter (@larksuiteoapi/node-sdk)
-│   │   ├── client.ts            # Feishu API client (send messages, reactions)
-│   │   └── cards.ts             # Feishu interactive card formatting
-│   ├── telegram/adapter.ts      # Telegram polling adapter
-│   ├── discord/adapter.ts       # Discord gateway adapter
-│   └── dingtalk/adapter.ts      # DingTalk webhook adapter
-├── workspace/
-│   └── workspace.ts             # Per-agent/per-user file management
-└── webui/
-    ├── server.ts                # Express server (config API, secrets, SSE, CSRF)
-    ├── events.ts                # SSE event bus for live monitoring
-    └── static/index.html        # Web console SPA
-```
-
-## Configuration Reference
-
-All settings in `~/.atlasOS/config.json`. The config supports `${ENV_VAR}` expansion from `~/.atlasOS/.env`.
-
-| Section | Key Settings | Description |
-|---------|-------------|-------------|
-| `agent` | `backend`, `cli_path`, `timeout`, `max_retries` | AI backend selection and CLI configuration |
-| `channels` | `feishu`, `telegram`, `discord`, `dingtalk` | Platform adapter credentials and enable/disable |
-| `gateway` | `max_sessions`, `session_ttl`, `context_compression_threshold` | Session management and limits |
-| `access_control` | `admin_list`, `allow_list`, `roles`, `rate_limit` | RBAC and rate limiting |
-| `voice` | `stt` (Whisper), `tts` (Edge) | Voice message support |
-| `cron` | `tasks` | Scheduled recurring prompts |
-| `webui` | `enabled`, `port` | Web console (default: 20263) |
-| `logging` | `level`, `format`, `output` | Structured JSON logging |
-| `mcp` | `config_path` | MCP server configuration |
 
 ## Testing
 
 ```bash
-# Run all tests
-npm test
+# All packages
+yarn test
 
-# Watch mode
-npm run test:watch
+# Specific package
+yarn workspace atlas-agent test
+yarn workspace atlas-gateway test
+
+# Watch mode (in a package directory)
+cd packages/atlas-gateway && npx vitest --watch
 ```
 
-The test suite covers:
+Test coverage: 541+ tests across gateway, 9+ tests for Claude backend.
 
-- **Core modules**: Engine, session queue, command registry, error classification, dedup, cron, rate limiting, permission system, card builder
-- **Platform modules**: Feishu cards, message formatting, permission request cards
+## Idle Session Notifications
 
-## WebUI
+When a session is idle for the configured timeout (default 10 minutes), the bot sends a rich notification:
 
-Auto-starts on port 20263. Provides:
+```
+Chat: `oc_xxx`
+Agent: `claude`
+Last message: 帮我查一下这个 bug 的根因...
+Session age: 25 min | Idle: 10 min
+Reply `/takeover fac1d46d-...` to take over.
+```
 
-- **Monitor** — Live logs and message feed via Server-Sent Events (SSE)
-- **Configuration** — Visual tree editor for `config.json`
-- **Secrets** — Manage `.env` variables securely
-- **Status** — Uptime, connected platforms, active sessions
+Configure the timeout via `ATLAS_IDLE_TIMEOUT` (ms) or `idleTimeoutMs` in `atlas.config.json`.
 
-## Documentation
+## Claude Code Hook → Feishu
 
-| Document | Description |
-|----------|-------------|
-| [doc/memory.md](./doc/memory.md) | Change log and architecture notes |
-| [docs/superpowers/specs/](./docs/superpowers/specs/) | Design specifications |
-| [docs/superpowers/plans/](./docs/superpowers/plans/) | Implementation plans |
-| [go-archive/](./go-archive/) | Archived Go v1 implementation |
+Send Claude Code events to Feishu in real time. Two hooks included:
 
-## Contributing
+- **`hooks/notify-feishu.mjs`** — Notifies on every event
+- **`hooks/notify-feishu-filtered.mjs`** — Only code-changing tools (`Bash`, `Write`, `Edit`) + Stop/Error
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feat/my-feature`)
-3. Write tests first (TDD), then implement
-4. Run `npm test` to verify
-5. Submit a Pull Request
+Quick setup:
+
+```bash
+# Set env vars
+export FEISHU_APP_ID=cli_xxxxxxxxxxxx
+export FEISHU_APP_SECRET=your_secret
+export FEISHU_NOTIFY_CHAT=oc_xxxxxxxxxxxx
+```
+
+Add to `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "type": "command",
+        "command": "node /path/to/feishu-ai-assistant/hooks/notify-feishu-filtered.mjs"
+      }
+    ]
+  }
+}
+```
+
+See [INSTALL.md](./INSTALL.md#claude-code-hook--feishu-notifications) for full documentation.
 
 ## License
 

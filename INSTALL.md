@@ -1,335 +1,413 @@
 # Installation Guide
 
-Step-by-step guide to deploy **Feishu AI Assistant** on a new machine (Windows / macOS / Linux).
-
-All runtime configuration lives in `~/.atlasOS/`. On first run, the app auto-creates `config.json` and `.env` there.
-
-## One-Click Setup
-
-The setup script handles everything: install, build, configure credentials, and start as a PM2 background service.
-
-```bash
-# 1. Install Claude CLI (if not installed)
-npm install -g @anthropic-ai/claude-code
-claude auth login
-
-# 2. Clone and run setup
-git clone https://github.com/lz865469181/AtlasOS.git feishu-ai-assistant
-cd feishu-ai-assistant
-
-# macOS / Linux
-bash scripts/setup.sh
-
-# Windows (CMD)
-scripts\setup.cmd
-```
-
-The script will:
-1. Install dependencies and build
-2. Bootstrap `~/.atlasOS/config.json` and `~/.atlasOS/.env`
-3. Prompt for Feishu App ID and Secret
-4. Install PM2 and start the service in background
-
-After setup:
-```bash
-pm2 status                          # check service status
-pm2 logs feishu-ai-assistant        # view logs
-pm2 restart feishu-ai-assistant     # restart
-pm2 startup                         # auto-start on boot
-```
-
-> **Feishu App Setup**: Before running, create a Feishu app at https://open.feishu.cn/app — add Bot capability, subscribe to `im.message.receive_v1`, grant `im:message` permissions, and enable WebSocket connection mode.
-
-## Manual Deploy (Step by Step)
-
----
-
-## Detailed Guide
+Step-by-step guide to deploy **Feishu AI Assistant (Atlas AI)** on a new machine.
 
 ## Prerequisites
 
 | Dependency | Version | Check |
 |-----------|---------|-------|
 | Node.js | >= 18 | `node -v` |
-| npm | >= 9 | `npm -v` |
+| Yarn | 1.x | `yarn -v` |
 | Git | any | `git --version` |
-| Claude Code CLI | latest | `claude --version` |
-
-### Install Claude Code CLI
-
-```bash
-npm install -g @anthropic-ai/claude-code
-claude --version
-claude auth login   # one-time authentication
-```
 
 ## 1. Clone & Install
 
 ```bash
 git clone https://github.com/lz865469181/AtlasOS.git feishu-ai-assistant
 cd feishu-ai-assistant
-npm install
+yarn install
 ```
 
-## 2. Build
+## 2. Configure Credentials
+
+Copy the example env file and fill in your credentials:
 
 ```bash
-npm run build
+cp .env.example .env
 ```
 
-This compiles TypeScript to `dist/` and registers the `beam-flow` CLI via the `bin` field in `package.json`.
-
-## 3. First Run (Auto-Bootstrap)
+Edit `.env`:
 
 ```bash
-npm start
-```
+# ── Required ──────────────────────────────────────
 
-On first run, the app automatically creates:
-
-| File | Description |
-|------|-------------|
-| `~/.atlasOS/config.json` | Copied from project template, or created with defaults |
-| `~/.atlasOS/.env` | Copied from project `.env`, or created with placeholder |
-
-You'll see:
-```
-[bootstrap] Copied config.json → ~/.atlasOS/config.json
-[bootstrap] Created .env template → ~/.atlasOS/.env
-```
-
-## 4. Configure Credentials
-
-Edit `~/.atlasOS/.env`:
-
-```bash
-# Windows
-notepad %USERPROFILE%\.atlasOS\.env
-
-# macOS / Linux
-nano ~/.atlasOS/.env
-```
-
-Set these values:
-
-```bash
-# Required: Feishu bot credentials
+# Feishu/Lark bot credentials
+# Get from: https://open.feishu.cn/app > Your App > Credentials
 FEISHU_APP_ID=cli_xxxxxxxxxxxx
 FEISHU_APP_SECRET=your_app_secret_here
 
-# Optional: for Claude API mode (not CLI mode)
-ANTHROPIC_API_KEY=sk-ant-xxx
+# Anthropic API key
+# Get from: https://console.anthropic.com/settings/keys
+ANTHROPIC_API_KEY=sk-ant-api03-xxxxxxxxxxxx
+
+# ── Optional ──────────────────────────────────────
+
+# DingTalk (if using DingTalk channel)
+# DINGTALK_APP_KEY=your_dingtalk_app_key
+# DINGTALK_APP_SECRET=your_dingtalk_app_secret
+# DINGTALK_MODE=stream
+
+# Claude model settings
+# CLAUDE_MODEL=claude-sonnet-4-6
+# CLAUDE_MAX_TOKENS=8192
+# CLAUDE_SYSTEM_PROMPT=You are a helpful assistant.
+
+# System settings
+# ATLAS_IDLE_TIMEOUT=600000
+# ATLAS_LOG_LEVEL=info
 ```
 
-Get Feishu credentials from [Feishu Open Platform](https://open.feishu.cn/app) > Your App > Credentials.
+### Alternative: Config File
 
-## 5. Configure `~/.atlasOS/config.json`
+For richer configuration, create `atlas.config.json` at the project root:
 
-The default config works out of the box for Claude CLI backend + Feishu. Key sections to review:
-
-```jsonc
+```json
 {
-  "agent": {
-    "backend": "claude",           // claude | codex | gemini | cursor | opencode
-    "claude_cli_path": "claude",   // path to claude CLI executable
-    "timeout": "120s",
-    "max_retries": 3
-  },
   "channels": {
     "feishu": {
-      "app_id": "${FEISHU_APP_ID}",       // reads from ~/.atlasOS/.env
-      "app_secret": "${FEISHU_APP_SECRET}",
-      "enabled": true
+      "appId": "cli_xxxxxxxxxxxx",
+      "appSecret": "your_app_secret_here"
     }
   },
-  "webui": {
-    "enabled": true,
-    "port": 20263
-  }
+  "agent": {
+    "cwd": ".",
+    "env": {
+      "ANTHROPIC_API_KEY": "sk-ant-api03-xxxxxxxxxxxx",
+      "CLAUDE_MODEL": "claude-sonnet-4-6",
+      "CLAUDE_MAX_TOKENS": "8192",
+      "CLAUDE_SYSTEM_PROMPT": "You are a helpful assistant."
+    },
+    "defaultAgent": "claude",
+    "defaultPermissionMode": "auto"
+  },
+  "idleTimeoutMs": 600000,
+  "logLevel": "info"
 }
 ```
 
-### Feishu App Setup
+Config resolution: `atlas.config.json` → `.env` → runtime overrides (later wins).
 
-1. Go to [Feishu Open Platform](https://open.feishu.cn/app) > Create Enterprise App
+## 3. Feishu App Setup
+
+Before starting the service, create and configure a Feishu bot:
+
+1. Go to [Feishu Open Platform](https://open.feishu.cn/app) > **Create Enterprise App**
 2. **Add Bot capability**: App Features > Bot
 3. **Subscribe to events**: Event Subscriptions > Add `im.message.receive_v1`
-4. **Permissions**: grant `im:message`, `im:message:readonly`, `im:message.reactions:write`
-5. **Connection method**: Event Subscriptions > choose **WebSocket**
+4. **Grant permissions**: `im:message`, `im:message:readonly`
+5. **Connection method**: Event Subscriptions > choose **WebSocket** (not HTTP callback)
 6. **Publish** the app and approve it in your organization
+7. Copy **App ID** and **App Secret** to your `.env` file
 
-## 6. Run
-
-> **Note**: `npm` commands (`npm start`, `npm run dev`) must run inside the project directory. `node dist/index.js` can run from **any directory**.
+## 4. Build
 
 ```bash
-# ─── In the project directory ───
+yarn build
+```
 
-# Development (hot-reload)
-cd /path/to/feishu-ai-assistant
-npm run dev
+This builds all packages in dependency order:
+`atlas-wire` → `atlas-agent` → `atlas-app-logs` → `atlas-gateway` → `atlas-cli`
 
-# Production
-npm run build && npm start
+## 5. Start
 
-# ─── From any directory (no need to cd) ───
+```bash
+# Foreground (see logs directly)
+yarn start
 
-# Direct node (works from anywhere)
-node /path/to/feishu-ai-assistant/dist/index.js
-
-# Windows example
-node D:\github_code\feishu-ai-assistant\dist\index.js
-
-# ─── Background service (any directory) ───
-
-# PM2 (recommended)
-pm2 start /path/to/feishu-ai-assistant/dist/index.js --name feishu-ai-assistant
-
-# PM2 with auto-restart on boot
-pm2 save && pm2 startup
+# Or use dev mode with hot reload
+yarn dev
 ```
 
 Expected output:
 
 ```
-{"level":"info","msg":"Configuration loaded"}
-{"level":"info","msg":"Workspace initialized"}
-{"level":"info","msg":"Engine started","platforms":["feishu"],"webui":"http://127.0.0.1:20263"}
+[atlas] Feishu adapter started
+[atlas] Started — active channels: feishu
 ```
 
-## 7. Verify
+## 6. Verify
 
-- Open `http://127.0.0.1:20263` in your browser to see the WebUI console
-- Send a message to your bot in Feishu — it should reply with Claude's response
+1. Open Feishu and find your bot (by the app name you configured)
+2. Send any message — the bot calls Claude API and streams the response back
+3. You should see streaming text responses in the chat
 
-## Bot Commands (Feishu Slash Commands)
+## Running as a Background Service
 
-Send these commands to the bot in Feishu:
-
-| Command | Aliases | Description |
-|---------|---------|-------------|
-| `/new` | `/reset` | Create new session (clear current context) |
-| `/stop` | | Stop current agent execution |
-| `/compress` | `/compact` | Compress context by resetting session |
-| `/history` | | Show session history summary |
-| `/model` | `/m` | Switch AI model or list available models |
-| `/sessions` | `/ss` | List all parked CLI sessions |
-| `/list` | `/ls` | List parked sessions (alias for /sessions) |
-| `/resume <name>` | `/rs` | Resume a parked session |
-| `/switch <name>` | `/sw` | Switch to a parked session |
-| `/delete <name>` | `/del`, `/rm` | Delete a parked session |
-| `/workspace` | `/ws` | Show current workspace binding |
-| `/help` | `/h` | List all available commands |
-| `/status` | | Show server and session status |
-| `/whoami` | `/myid` | Show your user ID and platform info |
-| `/version` | `/ver` | Show application version |
-
-> Commands support prefix matching — e.g. `/mod` resolves to `/model` if unambiguous.
-
-## beam-flow CLI
-
-After `npm install` and `npm run build`, the `beam-flow` command is available:
-
-```bash
-# Run via npm script (development)
-npm run beam start my-session
-npm run beam sessions
-npm run beam park
-npm run beam drop my-session
-
-# Run the built JS directly (works from any directory)
-node dist/cli/beam-flow.js --help
-node dist/cli/beam-flow.js -d sessions    # -d starts server daemon first
-```
-
-### Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `BEAM_SERVER_URL` | `http://127.0.0.1:20263` | Server URL for beam-flow API |
-| `CLAUDE_CLI_PATH` | `claude` | Path to the Claude CLI executable |
-| `FEISHU_APP_ID` | — | Feishu app ID (in `~/.atlasOS/.env`) |
-| `FEISHU_APP_SECRET` | — | Feishu app secret (in `~/.atlasOS/.env`) |
-| `ANTHROPIC_API_KEY` | — | Anthropic API key (optional, for API mode) |
-
-## Directory Structure
-
-All runtime data and configuration lives in `~/.atlasOS/`:
-
-```
-~/.atlasOS/
-├── config.json               # Runtime configuration
-├── .env                      # Credentials (FEISHU_APP_ID, etc.)
-└── agents/default/
-    ├── sessions.json          # Active session state
-    ├── SOUL.md                # Agent personality
-    ├── AGENTS.md              # Agent configuration
-    └── users/{user-id}/
-        ├── CLAUDE.md          # Per-user project instructions
-        ├── MEMORY.md          # Per-user conversation memory
-        └── USER.md            # Per-user preferences
-```
-
-The project directory only contains source code and build output:
-
-```
-feishu-ai-assistant/
-├── dist/                     # Compiled output (after npm run build)
-│   ├── index.js              # Server entry point
-│   └── cli/
-│       └── beam-flow.js      # CLI entry point
-├── src/                      # TypeScript source
-├── config.json               # Template config (copied to ~/.atlasOS/ on first run)
-├── package.json
-└── node_modules/
-```
-
-## Running as a Service (Optional)
-
-### Using PM2
+### PM2 (Recommended)
 
 ```bash
 npm install -g pm2
-pm2 start dist/index.js --name feishu-ai-assistant
+
+# Start
+cd /path/to/feishu-ai-assistant
+pm2 start "yarn start" --name atlas-ai
+
+# Auto-restart on boot
 pm2 save
-pm2 startup   # auto-start on boot
+pm2 startup
+
+# Manage
+pm2 status
+pm2 logs atlas-ai
+pm2 restart atlas-ai
 ```
 
-### Using systemd (Linux)
+### systemd (Linux)
 
-Create `/etc/systemd/system/feishu-ai-assistant.service`:
+Create `/etc/systemd/system/atlas-ai.service`:
 
 ```ini
 [Unit]
-Description=Feishu AI Assistant
+Description=Atlas AI (Feishu AI Assistant)
 After=network.target
 
 [Service]
 Type=simple
 User=deploy
 WorkingDirectory=/path/to/feishu-ai-assistant
-ExecStart=/usr/bin/node /path/to/feishu-ai-assistant/dist/index.js
+ExecStart=/usr/bin/yarn start
 Restart=on-failure
+EnvironmentFile=/path/to/feishu-ai-assistant/.env
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-> Note: No `EnvironmentFile` needed — credentials are loaded from `~/.atlasOS/.env` automatically.
+```bash
+sudo systemctl enable atlas-ai
+sudo systemctl start atlas-ai
+sudo systemctl status atlas-ai
+```
+
+## Configuration Reference
+
+### All Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `FEISHU_APP_ID` | Yes* | — | Feishu bot App ID |
+| `FEISHU_APP_SECRET` | Yes* | — | Feishu bot App Secret |
+| `ANTHROPIC_API_KEY` | Yes | — | Anthropic API key for Claude |
+| `DINGTALK_APP_KEY` | No | — | DingTalk App Key |
+| `DINGTALK_APP_SECRET` | No | — | DingTalk App Secret |
+| `DINGTALK_MODE` | No | `webhook` | `stream` or `webhook` |
+| `CLAUDE_MODEL` | No | `claude-sonnet-4-6` | Claude model ID |
+| `CLAUDE_MAX_TOKENS` | No | `8192` | Max response tokens |
+| `CLAUDE_SYSTEM_PROMPT` | No | *(none)* | System prompt |
+| `AGENT_CWD` | No | `.` | Agent working directory |
+| `AGENT_DEFAULT_AGENT` | No | `claude` | Default agent backend |
+| `AGENT_PERMISSION_MODE` | No | `auto` | `auto` / `confirm` / `deny` |
+| `ATLAS_IDLE_TIMEOUT` | No | `600000` | Idle timeout in ms (10 min) |
+| `ATLAS_LOG_LEVEL` | No | `info` | `debug` / `info` / `warn` / `error` |
+
+*At least one channel (Feishu or DingTalk) must be configured.
+
+### Config Schema (atlas.config.json)
+
+```typescript
+{
+  channels: {
+    feishu?: { appId: string; appSecret: string; verificationToken?: string };
+    dingtalk?: { appKey: string; appSecret: string; mode: 'stream' | 'webhook' };
+  };
+  agent: {
+    cwd: string;                           // default: '.'
+    env?: Record<string, string>;          // passed to agent backend
+    defaultAgent: string;                  // default: 'claude'
+    defaultModel?: string;
+    defaultPermissionMode: 'auto' | 'confirm' | 'deny';  // default: 'auto'
+  };
+  idleTimeoutMs: number;                   // default: 600000 (10 min)
+  logLevel: 'debug' | 'info' | 'warn' | 'error';  // default: 'info'
+}
+```
+
+## Monorepo Structure
+
+```
+feishu-ai-assistant/
+├── .env                          # Credentials (git-ignored)
+├── .env.example                  # Template
+├── atlas.config.json             # Optional config file
+├── package.json                  # Yarn workspaces root
+├── packages/
+│   ├── atlas-wire/               # Shared types & zod schemas
+│   ├── atlas-agent/              # Agent abstraction layer
+│   │   └── src/
+│   │       ├── core/             # AgentBackend, AgentMessage, AgentRegistry
+│   │       ├── backends/
+│   │       │   └── claude/       # ClaudeBackend (Anthropic SDK)
+│   │       └── transport/        # Transport abstractions
+│   ├── atlas-gateway/            # Engine, channels, cards, sessions
+│   │   └── src/
+│   │       ├── engine/           # Engine, SessionManager, IdleWatcher
+│   │       ├── channel/          # Feishu/DingTalk adapters
+│   │       ├── cards/            # Interactive card system
+│   │       └── config/           # ConfigLoader, ConfigSchema
+│   ├── atlas-app-logs/           # Structured logging
+│   └── atlas-cli/                # Entry point
+│       └── src/
+│           ├── index.ts          # Main entry (loads config, starts app)
+│           └── createApp.ts      # Wires all components together
+└── src/                          # Legacy v1 code (being migrated)
+```
+
+## Adding a New Agent Backend
+
+The agent system uses a registry pattern. To add a new AI provider:
+
+1. **Create the backend** at `packages/atlas-agent/src/backends/myagent/MyAgentBackend.ts`:
+
+```typescript
+import type { AgentBackend, StartSessionResult } from '../../core/AgentBackend.js';
+import type { AgentMessage, AgentMessageHandler, SessionId } from '../../core/AgentMessage.js';
+import type { AgentFactoryOptions } from '../../core/AgentRegistry.js';
+
+export class MyAgentBackend implements AgentBackend {
+  private handlers = new Set<AgentMessageHandler>();
+
+  constructor(opts: AgentFactoryOptions) {
+    // Initialize your AI client using opts.env for API keys
+  }
+
+  onMessage(handler: AgentMessageHandler): void { this.handlers.add(handler); }
+  offMessage(handler: AgentMessageHandler): void { this.handlers.delete(handler); }
+  private emit(msg: AgentMessage): void { for (const h of this.handlers) h(msg); }
+
+  async startSession(): Promise<StartSessionResult> {
+    const sessionId = crypto.randomUUID();
+    this.emit({ type: 'status', status: 'starting' });
+    this.emit({ type: 'status', status: 'idle' });
+    return { sessionId };
+  }
+
+  async sendPrompt(sessionId: SessionId, prompt: string): Promise<void> {
+    this.emit({ type: 'status', status: 'running' });
+    // Call your AI API, emit model-output events for streaming
+    this.emit({ type: 'model-output', textDelta: 'Hello' });
+    this.emit({ type: 'model-output', fullText: 'Hello world' });
+    this.emit({ type: 'status', status: 'idle' });
+  }
+
+  async cancel(sessionId: SessionId): Promise<void> { /* abort */ }
+  async dispose(): Promise<void> { /* cleanup */ }
+}
+```
+
+2. **Register it** at `packages/atlas-agent/src/backends/myagent/index.ts`:
+
+```typescript
+import { agentRegistry } from '../../core/AgentRegistry.js';
+import { MyAgentBackend } from './MyAgentBackend.js';
+agentRegistry.register('myagent', (opts) => new MyAgentBackend(opts));
+```
+
+3. **Import** in `packages/atlas-agent/src/backends/index.ts`:
+
+```typescript
+import './claude/index.js';
+import './myagent/index.js';  // add this line
+```
+
+4. **Use it** by setting `AGENT_DEFAULT_AGENT=myagent` in `.env` or `"defaultAgent": "myagent"` in `atlas.config.json`.
+
+The backend auto-registers via the import side-effect chain — no hooks or manual wiring needed.
+
+## Claude Code Hook → Feishu Notifications
+
+Send Claude Code events (tool calls, errors, completion) to a Feishu chat in real time.
+
+### Setup
+
+1. **Set environment variables** (in your shell profile or `.env`):
 
 ```bash
-sudo systemctl enable feishu-ai-assistant
-sudo systemctl start feishu-ai-assistant
-sudo systemctl status feishu-ai-assistant
+export FEISHU_APP_ID=cli_xxxxxxxxxxxx
+export FEISHU_APP_SECRET=your_app_secret_here
+export FEISHU_NOTIFY_CHAT=oc_xxxxxxxxxxxx   # target chat ID
+```
+
+To find your chat ID: send any message to the bot → check server logs for the `chatId` field.
+
+2. **Configure Claude Code hooks** in `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "type": "command",
+        "command": "node /path/to/feishu-ai-assistant/hooks/notify-feishu-filtered.mjs"
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "node /path/to/feishu-ai-assistant/hooks/notify-feishu.mjs"
+      }
+    ]
+  }
+}
+```
+
+### Two Hook Variants
+
+| Hook | File | Description |
+|------|------|-------------|
+| **Full** | `hooks/notify-feishu.mjs` | Notifies on every event — useful for debugging |
+| **Filtered** | `hooks/notify-feishu-filtered.mjs` | Only notifies on `Bash`, `Write`, `Edit` tool calls + Stop/Error events |
+
+### Filtering Configuration
+
+The filtered hook only sends notifications for code-changing tools by default. Customize via:
+
+```bash
+# Only notify on Bash commands (default: Bash,Write,Edit)
+export FEISHU_NOTIFY_TOOLS=Bash
+
+# Notify on all tools that modify files
+export FEISHU_NOTIFY_TOOLS=Bash,Write,Edit,NotebookEdit
+```
+
+### Available Hook Events
+
+| Claude Code Event | When it fires |
+|-------------------|---------------|
+| `PreToolUse` | Before a tool is executed |
+| `PostToolUse` | After a tool finishes |
+| `Stop` | When Claude Code session ends |
+| `Notification` | System notifications |
+
+### Hook Data
+
+Claude Code pipes JSON to the hook's stdin with these fields:
+
+| Field | Description |
+|-------|-------------|
+| `hook_event_name` | Event type (`PostToolUse`, `Stop`, etc.) |
+| `tool_name` | Tool name (`Bash`, `Read`, `Write`, etc.) |
+| `tool_input` | Tool input (command, file path, etc.) |
+| `tool_output` | Tool output/result |
+| `session_id` | Claude Code session ID |
+
+### Example Notification in Feishu
+
+```
+🔧 [Claude Code] PostToolUse
+Session: a1b2c3d4...
+Tool: Bash
+Input: {"command":"yarn test"}
+Output: ✓ 541 tests passed
 ```
 
 ## Troubleshooting
 
 | Problem | Solution |
 |---------|----------|
-| `claude: command not found` | Install Claude CLI: `npm install -g @anthropic-ai/claude-code` |
-| `Configuration loaded` then crash | Check `~/.atlasOS/.env` has valid `FEISHU_APP_ID` and `FEISHU_APP_SECRET` |
-| Feishu bot not responding | Verify WebSocket mode is enabled in Feishu app settings |
-| `EADDRINUSE` port error | Another process is using port 20263. Change `webui.port` in `~/.atlasOS/config.json` |
-| `fetch failed` in beam-flow | Server not running. Start it first with `npm start` or use `-d` flag |
-| Config not updating | Config lives at `~/.atlasOS/config.json`, not in the project root |
+| `Unknown agent: claude` | Missing `ANTHROPIC_API_KEY` in `.env`, or `atlas-agent` not built |
+| `Cannot create Feishu sender` | `FEISHU_APP_ID` / `FEISHU_APP_SECRET` not set |
+| `At least one channel must be configured` | Set Feishu or DingTalk credentials in `.env` |
+| Bot connected but no response | Check `ANTHROPIC_API_KEY` is valid; check logs for API errors |
+| `yarn build` fails | Run `yarn install` first; ensure Node.js >= 18 |
+| `@vitest/mocker` missing | Run `yarn install` (it's in devDependencies) |
+| Idle notifications show bare UUIDs | Update to latest version — now shows chat/agent/message context |

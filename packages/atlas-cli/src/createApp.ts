@@ -171,9 +171,42 @@ export function createApp(config: AppConfig | AtlasConfig): App {
     onIdle: async (sessionId, chatId) => {
       try {
         const sender = senderFactory(chatId);
-        await sender.sendText(
-          `Session \`${sessionId}\` has been idle for ${Math.round(normalized.idleTimeoutMs / 60000)} minutes. Reply \`/takeover ${sessionId}\` to take over.`,
-        );
+        const session = sessionManager.get(chatId);
+        const minutes = Math.round(normalized.idleTimeoutMs / 60000);
+
+        if (session) {
+          const age = Math.round((Date.now() - session.createdAt) / 60000);
+          const preview = session.lastPrompt
+            ? session.lastPrompt.length > 60
+              ? session.lastPrompt.slice(0, 60) + '...'
+              : session.lastPrompt
+            : '(no message)';
+
+          await sender.sendCard({
+            header: {
+              title: `Session Idle — ${minutes} min`,
+              icon: '\u{23F3}',
+              status: 'waiting',
+            },
+            sections: [
+              {
+                type: 'fields',
+                fields: [
+                  { label: 'Agent', value: session.agentId, short: true },
+                  { label: 'Session Age', value: `${age} min`, short: true },
+                  { label: 'Last Message', value: preview },
+                ],
+              },
+              { type: 'divider' },
+              {
+                type: 'markdown',
+                content: `Reply \`/takeover ${sessionId}\` to take over.`,
+              },
+            ],
+          });
+        } else {
+          await sender.sendText(`Session idle for ${minutes} minutes.`);
+        }
       } catch (err) {
         console.error(
           JSON.stringify({ time: new Date().toISOString(), level: 'error', msg: 'IdleWatcher.onIdle notification failed', sessionId, chatId, error: String(err) }),

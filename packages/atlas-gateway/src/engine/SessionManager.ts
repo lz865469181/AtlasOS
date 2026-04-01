@@ -15,6 +15,7 @@ export interface SessionInfo {
   permissionMode: string;
   createdAt: number;
   lastActiveAt: number;
+  lastPrompt?: string;
 }
 
 export interface SessionManager {

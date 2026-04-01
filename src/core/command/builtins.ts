@@ -26,7 +26,7 @@ export function createSessionsCommand(store: ParkedSessionStore): CommandDef {
     handler: async (ctx: CommandContext) => {
       const sessions = store.list();
       if (sessions.length === 0) {
-        await ctx.reply("No sessions. Use `beam-flow start <name>` from your terminal to start a session.");
+        await ctx.reply("No sessions. Use `beam start <name>` from your terminal to start a session.");
         return;
       }
       const lines = sessions.map((s, i) => {
@@ -370,7 +370,7 @@ export function createListCommand(store: ParkedSessionStore): CommandDef {
     handler: async (ctx: CommandContext) => {
       const sessions = store.list();
       if (sessions.length === 0) {
-        await ctx.reply("No sessions. Use `beam-flow start <name>` from your terminal to start a session.");
+        await ctx.reply("No sessions. Use `beam start <name>` from your terminal to start a session.");
         return;
       }
       const lines = sessions.map((s, i) => {

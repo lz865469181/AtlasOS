@@ -126,12 +126,27 @@ export class EngineImpl implements Engine {
     // 3. Get or create session
     const session = await this.sessionManager.getOrCreate(event.chatId, undefined, event.channelId);
 
-    // 4. Touch idle watcher to reset the timer
+    // 4. Store the latest prompt text for idle notifications
+    if (text) {
+      session.lastPrompt = text;
+    }
+
+    // 5. Touch idle watcher to reset the timer
     this.idleWatcher?.touch(session.sessionId, session.chatId);
 
-    // 5. Invoke the onPrompt callback to let callers wire the agent
+    // 6. Invoke the onPrompt callback to let callers wire the agent
     if (this.onPrompt) {
-      await this.onPrompt(session, event);
+      try {
+        await this.onPrompt(session, event);
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        try {
+          const sender = this.senderFactory(event.chatId, event.channelId);
+          await sender.sendText(`❌ Agent error: ${detail}`);
+        } catch {
+          // If we can't even send the error, just log it
+        }
+      }
     }
   }
 

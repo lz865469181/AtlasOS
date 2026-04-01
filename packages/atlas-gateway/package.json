@@ -1,6 +1,6 @@
 {
   "name": "atlas-gateway",
-  "version": "0.1.0",
+  "version": "3.0.0",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
@@ -11,23 +11,24 @@
     "dev": "tsx watch src/index.ts"
   },
   "dependencies": {
-    "atlas-wire": "0.1.0",
-    "atlas-agent": "0.1.0",
     "@larksuiteoapi/node-sdk": "^1.38.0",
-    "express": "^4.21.2",
+    "atlas-agent": "3.0.0",
+    "atlas-wire": "3.0.0",
     "dotenv": "^16.4.7",
+    "express": "^4.21.2",
     "qrcode": "^1.5.4",
     "zod": "^3.23.0"
   },
   "optionalDependencies": {
-    "node-telegram-bot-api": "^0.66.0",
-    "discord.js": "^14.16.0"
+    "discord.js": "^14.16.0",
+    "node-telegram-bot-api": "^0.66.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
     "@types/node": "^22.13.0",
     "@types/node-telegram-bot-api": "^0.64.0",
     "@types/qrcode": "^1.5.6",
+    "@vitest/mocker": "^4.1.2",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
     "vitest": "^4.1.0"
