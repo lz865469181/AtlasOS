@@ -29,6 +29,8 @@ export interface CardEngine {
   handleMessage(sessionId: string, chatId: string, msg: AgentMessage): void;
   handlePermissionResponse(sessionId: string, payload: PermissionActionPayload): void;
   getStreamingState(sessionId: string): StreamingStateMachine | undefined;
+  /** Set the user message ID that new cards should reply to (creates Feishu thread). */
+  setReplyTarget(sessionId: string, messageId: string): void;
   dispose(sessionId: string): void;
 }
 
@@ -64,6 +66,9 @@ export class CardEngineImpl implements CardEngine {
 
   /** sessionId -> Map<call_id, cardId> for patch-apply cards */
   private patchCards = new Map<string, Map<string, string>>();
+
+  /** sessionId -> user message ID to reply to (for Feishu thread/topic) */
+  private replyTargets = new Map<string, string>();
 
   constructor(deps: CardEngineDeps) {
     this.cardStore = deps.cardStore;
@@ -160,6 +165,10 @@ export class CardEngineImpl implements CardEngine {
     return this.streamingSMs.get(sessionId);
   }
 
+  setReplyTarget(sessionId: string, messageId: string): void {
+    this.replyTargets.set(sessionId, messageId);
+  }
+
   dispose(sessionId: string): void {
     const sm = this.streamingSMs.get(sessionId);
     if (sm) {
@@ -171,6 +180,12 @@ export class CardEngineImpl implements CardEngine {
     this.statusCards.delete(sessionId);
     this.terminalCards.delete(sessionId);
     this.patchCards.delete(sessionId);
+    this.replyTargets.delete(sessionId);
+  }
+
+  /** Get the user's message ID to reply to for creating threaded cards. */
+  private getReplyTo(sessionId: string): string | undefined {
+    return this.replyTargets.get(sessionId);
   }
 
   // ── Private handlers ──────────────────────────────────────────────────
@@ -191,7 +206,7 @@ export class CardEngineImpl implements CardEngine {
           status: 'running',
         },
         sections: [{ type: 'markdown', content: '' }],
-      });
+      }, this.getReplyTo(sessionId));
       console.log(`[CardEngine] Created streaming card=${cardState.cardId} for chat=${chatId}`);
 
       // Wire up flush handler: update card content
@@ -300,7 +315,7 @@ export class CardEngineImpl implements CardEngine {
         sections: [{ type: 'note', content: msg.detail! }],
       };
 
-      const cardState = this.cardStore.create(chatId, 'status', content);
+      const cardState = this.cardStore.create(chatId, 'status', content, this.getReplyTo(sessionId));
       cardState.metadata['agentStatus'] = msg.status;
       this.statusCards.set(sessionId, cardState.cardId);
 
@@ -318,7 +333,7 @@ export class CardEngineImpl implements CardEngine {
     if (this.toolCardBuilder.isHidden(msg.toolName)) return;
 
     const cardModel = this.toolCardBuilder.build(msg.toolName, msg.args, undefined, 'running');
-    const cardState = this.cardStore.create(chatId, 'tool', cardModel);
+    const cardState = this.cardStore.create(chatId, 'tool', cardModel, this.getReplyTo(sessionId));
 
     this.correlationStore.create({
       cardId: cardState.cardId,
@@ -393,7 +408,7 @@ export class CardEngineImpl implements CardEngine {
       description: msg.reason,
     });
 
-    const cardState = this.cardStore.create(chatId, 'permission', cardModel);
+    const cardState = this.cardStore.create(chatId, 'permission', cardModel, this.getReplyTo(sessionId));
 
     this.correlationStore.create({
       cardId: cardState.cardId,
@@ -455,7 +470,7 @@ export class CardEngineImpl implements CardEngine {
       sections,
     };
 
-    const cardState = this.cardStore.create(chatId, 'tool', content);
+    const cardState = this.cardStore.create(chatId, 'tool', content, this.getReplyTo(sessionId));
 
     this.correlationStore.create({
       cardId: cardState.cardId,
@@ -506,7 +521,7 @@ export class CardEngineImpl implements CardEngine {
       sections: [{ type: 'markdown', content: '```\n' + msg.data + '\n```' }],
     };
 
-    const cardState = this.cardStore.create(chatId, 'tool', content);
+    const cardState = this.cardStore.create(chatId, 'tool', content, this.getReplyTo(sessionId));
     this.terminalCards.set(sessionId, cardState.cardId);
 
     this.correlationStore.create({
@@ -535,7 +550,7 @@ export class CardEngineImpl implements CardEngine {
       sections,
     };
 
-    const cardState = this.cardStore.create(chatId, 'status', content);
+    const cardState = this.cardStore.create(chatId, 'status', content, this.getReplyTo(sessionId));
 
     this.correlationStore.create({
       cardId: cardState.cardId,
@@ -575,7 +590,7 @@ export class CardEngineImpl implements CardEngine {
       description: 'Execution approval requested',
     });
 
-    const cardState = this.cardStore.create(chatId, 'permission', cardModel);
+    const cardState = this.cardStore.create(chatId, 'permission', cardModel, this.getReplyTo(sessionId));
 
     this.correlationStore.create({
       cardId: cardState.cardId,
@@ -611,7 +626,7 @@ export class CardEngineImpl implements CardEngine {
       sections,
     };
 
-    const cardState = this.cardStore.create(chatId, 'tool', content);
+    const cardState = this.cardStore.create(chatId, 'tool', content, this.getReplyTo(sessionId));
 
     this.correlationStore.create({
       cardId: cardState.cardId,

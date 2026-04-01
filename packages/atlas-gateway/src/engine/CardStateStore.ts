@@ -5,6 +5,8 @@ export interface CardState {
   cardId: string;
   messageId: string | null;
   chatId: string;
+  /** When set, the first send of this card will reply to this message, creating a Feishu thread. */
+  replyToMessageId?: string;
   type: 'streaming' | 'tool' | 'permission' | 'status';
   status: 'active' | 'frozen' | 'completed' | 'error' | 'expired';
   content: CardModel;
@@ -44,11 +46,12 @@ export class CardStateStoreImpl {
     this.config = { ...DEFAULT_CONFIG, ...config };
   }
 
-  create(chatId: string, type: CardState['type'], initial: CardModel): CardState {
+  create(chatId: string, type: CardState['type'], initial: CardModel, replyToMessageId?: string): CardState {
     const state: CardState = {
       cardId: randomUUID(),
       messageId: null,
       chatId,
+      replyToMessageId,
       type,
       status: 'active',
       content: initial,

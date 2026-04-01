@@ -171,9 +171,10 @@ export class CardRenderPipeline {
       // Card already has a message — update (PATCH).
       await sender.updateCard(messageId, rendered);
     } else {
-      // Card is new — send and record the messageId.
-      const newMessageId = await sender.sendCard(rendered);
-      console.log(`[Pipeline] new card sent, messageId=${newMessageId}`);
+      // Card is new — send as reply to the user's message (creates a Feishu thread).
+      const replyTo = latestState?.replyToMessageId ?? state.replyToMessageId;
+      const newMessageId = await sender.sendCard(rendered, replyTo);
+      console.log(`[Pipeline] new card sent, messageId=${newMessageId} replyTo=${replyTo ?? 'none'}`);
       this.correlationStore.setMessageId(cardId, newMessageId);
       this.store.setMessageId(cardId, newMessageId);
     }

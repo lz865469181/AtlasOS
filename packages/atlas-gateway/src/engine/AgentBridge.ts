@@ -79,6 +79,9 @@ export class AgentBridge {
         // Only send text content
         if (event.content.type !== 'text') return;
 
+        // Set the user's message as the reply target so new cards create a Feishu thread
+        this.cardEngine.setReplyTarget(session.sessionId, event.messageId);
+
         await managed.agent.sendPrompt(managed.agentSessionId, event.content.text);
       } catch (err) {
         const entry = {
