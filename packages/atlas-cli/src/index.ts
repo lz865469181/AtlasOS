@@ -1,23 +1,17 @@
 import 'dotenv/config';
+import { ConfigLoader } from 'atlas-gateway';
 import { createApp } from './createApp.js';
 
-const required = (name: string): string => {
-  const val = process.env[name];
-  if (!val) {
-    console.error(`Missing required environment variable: ${name}`);
-    process.exit(1);
-  }
-  return val;
-};
+// Load config from file → env → runtime
+const config = await ConfigLoader.load();
 
-const app = createApp({
-  feishuAppId: required('FEISHU_APP_ID'),
-  feishuAppSecret: required('FEISHU_APP_SECRET'),
-  agentCwd: process.env.AGENT_CWD ?? process.cwd(),
-  agentEnv: Object.fromEntries(
-    Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
-  ),
-});
+// Validate at least one channel is configured
+if (!config.channels.feishu && !config.channels.dingtalk) {
+  console.error('At least one channel must be configured: set FEISHU_APP_ID/FEISHU_APP_SECRET or DINGTALK_APP_KEY/DINGTALK_APP_SECRET');
+  process.exit(1);
+}
+
+const app = createApp(config);
 
 await app.start();
 

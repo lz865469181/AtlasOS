@@ -9,6 +9,7 @@ import type { AgentId } from 'atlas-agent';
 export interface SessionInfo {
   sessionId: string;
   chatId: string;
+  channelId: string;
   agentId: AgentId;
   model?: string;
   permissionMode: string;
@@ -17,7 +18,7 @@ export interface SessionInfo {
 }
 
 export interface SessionManager {
-  getOrCreate(chatId: string, agentId?: AgentId): Promise<SessionInfo>;
+  getOrCreate(chatId: string, agentId?: AgentId, channelId?: string): Promise<SessionInfo>;
   get(chatId: string): SessionInfo | undefined;
   destroy(chatId: string): Promise<void>;
   switchAgent(chatId: string, agentId: AgentId): Promise<SessionInfo>;
@@ -36,6 +37,7 @@ export interface SerializedSessionStore {
 
 const DEFAULT_AGENT_ID: AgentId = 'claude';
 const DEFAULT_PERMISSION_MODE = 'normal';
+const DEFAULT_CHANNEL_ID = 'feishu';
 
 // ── Implementation ─────────────────────────────────────────────────────────
 
@@ -47,7 +49,7 @@ export class SessionManagerImpl implements SessionManager {
     this.filePath = filePath ?? join(homedir(), '.atlasOS', 'sessions', 'sessions.json');
   }
 
-  async getOrCreate(chatId: string, agentId?: AgentId): Promise<SessionInfo> {
+  async getOrCreate(chatId: string, agentId?: AgentId, channelId?: string): Promise<SessionInfo> {
     const existing = this.sessions.get(chatId);
     if (existing) {
       existing.lastActiveAt = Date.now();
@@ -57,6 +59,7 @@ export class SessionManagerImpl implements SessionManager {
     const session: SessionInfo = {
       sessionId: randomUUID(),
       chatId,
+      channelId: channelId ?? DEFAULT_CHANNEL_ID,
       agentId: agentId ?? DEFAULT_AGENT_ID,
       permissionMode: DEFAULT_PERMISSION_MODE,
       createdAt: Date.now(),

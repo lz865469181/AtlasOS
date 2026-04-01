@@ -96,7 +96,7 @@ export class EngineImpl implements Engine {
     if (text && text.startsWith('/')) {
       const resolved = this.commandRegistry.resolve(text);
       if (resolved) {
-        const sender = this.senderFactory(event.chatId);
+        const sender = this.senderFactory(event.chatId, event.channelId);
         const noopBridge: BridgeLike = {
           cancelSession: async () => {},
           destroySession: async () => {},
@@ -124,7 +124,7 @@ export class EngineImpl implements Engine {
     }
 
     // 3. Get or create session
-    const session = await this.sessionManager.getOrCreate(event.chatId);
+    const session = await this.sessionManager.getOrCreate(event.chatId, undefined, event.channelId);
 
     // 4. Touch idle watcher to reset the timer
     this.idleWatcher?.touch(session.sessionId, session.chatId);

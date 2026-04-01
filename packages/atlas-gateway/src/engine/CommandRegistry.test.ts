@@ -261,7 +261,7 @@ describe('CommandRegistry', () => {
       const hasSessionOverride = overrides !== undefined && 'session' in overrides;
       const session = hasSessionOverride
         ? overrides.session ?? undefined
-        : { sessionId: 's1', agentId: 'claude', model: 'opus', permissionMode: 'auto', createdAt: Date.now() - 60_000 };
+        : { sessionId: 's1', chatId: 'chat-1', channelId: 'feishu', agentId: 'claude', model: 'opus', permissionMode: 'auto', createdAt: Date.now() - 60_000 };
       const sessions = overrides?.sessions ?? (session ? [session] : []);
 
       return {

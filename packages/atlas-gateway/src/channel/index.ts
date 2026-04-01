@@ -4,3 +4,4 @@ export { ChannelEventSchema } from './channelEvent.js';
 export type { ChannelEvent, UserMessageContent } from './channelEvent.js';
 
 export * from './feishu/index.js';
+export * from './dingtalk/index.js';

@@ -7,3 +7,6 @@ export * from './channel/index.js';
 
 // ── Engine ───────────────────────────────────────────────────────────────
 export * from './engine/index.js';
+
+// ── Config ───────────────────────────────────────────────────────────────
+export * from './config/index.js';

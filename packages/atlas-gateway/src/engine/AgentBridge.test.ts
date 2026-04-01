@@ -43,6 +43,7 @@ function makeSession(overrides?: Partial<SessionInfo>): SessionInfo {
   return {
     sessionId: 'gw-session-1',
     chatId: 'chat-1',
+    channelId: 'feishu',
     agentId: 'claude',
     permissionMode: 'normal',
     createdAt: Date.now(),

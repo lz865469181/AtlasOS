@@ -24,6 +24,7 @@ describe('SessionManager', () => {
     it('creates a new session with defaults', async () => {
       const session = await manager.getOrCreate('chat-1');
       expect(session.chatId).toBe('chat-1');
+      expect(session.channelId).toBe('feishu');
       expect(session.agentId).toBe('claude');
       expect(session.permissionMode).toBe('normal');
       expect(session.sessionId).toBeDefined();
@@ -39,6 +40,11 @@ describe('SessionManager', () => {
     it('creates session with specified agentId', async () => {
       const session = await manager.getOrCreate('chat-1', 'codex');
       expect(session.agentId).toBe('codex');
+    });
+
+    it('creates session with specified channelId', async () => {
+      const session = await manager.getOrCreate('chat-1', undefined, 'dingtalk');
+      expect(session.channelId).toBe('dingtalk');
     });
 
     it('updates lastActiveAt on reuse', async () => {
@@ -168,6 +174,7 @@ describe('SessionManager', () => {
           {
             sessionId: 'sid-1',
             chatId: 'chat-1',
+            channelId: 'feishu',
             agentId: 'claude',
             permissionMode: 'normal',
             createdAt: 1000,

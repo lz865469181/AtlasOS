@@ -15,5 +15,6 @@ export interface ChannelSender {
 /**
  * Factory that creates a ChannelSender scoped to a specific chat.
  * Used by CardRenderPipeline to resolve senders per card.
+ * @param channelIdHint – optional override when no session exists yet (e.g. command handling before session creation).
  */
-export type SenderFactory = (chatId: string) => ChannelSender;
+export type SenderFactory = (chatId: string, channelIdHint?: string) => ChannelSender;
