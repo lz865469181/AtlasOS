@@ -63,6 +63,7 @@ export class AgentBridge {
           const result = await agent.startSession();
 
           const handler: AgentMessageHandler = (msg: AgentMessage) => {
+            console.log(`[AgentBridge] msg type=${msg.type} session=${session.sessionId}`, msg.type === 'model-output' ? `delta=${!!(msg as any).textDelta} full=${!!(msg as any).fullText}` : msg.type === 'status' ? `status=${(msg as any).status}` : '');
             this.cardEngine.handleMessage(session.sessionId, session.chatId, msg);
           };
           agent.onMessage(handler);

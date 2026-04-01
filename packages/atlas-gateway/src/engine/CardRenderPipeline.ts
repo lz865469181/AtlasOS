@@ -164,12 +164,16 @@ export class CardRenderPipeline {
     const latestState = this.store.get(cardId);
     const messageId = latestState?.messageId ?? state.messageId;
 
+    const sectionSummary = rendered.sections?.map(s => `${s.type}:${('content' in s ? String(s.content).slice(0, 50) : '')}`).join(', ') ?? 'none';
+    console.log(`[Pipeline] send card=${cardId} type=${state.type} status=${state.status} hasMessageId=${!!messageId} sections=[${sectionSummary}]`);
+
     if (messageId) {
       // Card already has a message — update (PATCH).
       await sender.updateCard(messageId, rendered);
     } else {
       // Card is new — send and record the messageId.
       const newMessageId = await sender.sendCard(rendered);
+      console.log(`[Pipeline] new card sent, messageId=${newMessageId}`);
       this.correlationStore.setMessageId(cardId, newMessageId);
       this.store.setMessageId(cardId, newMessageId);
     }

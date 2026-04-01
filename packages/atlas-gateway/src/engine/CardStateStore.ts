@@ -58,6 +58,8 @@ export class CardStateStoreImpl {
       metadata: {},
     };
     this.states.set(state.cardId, state);
+    // Immediately notify listeners so the card is sent right away
+    this.scheduleRender(state.cardId);
     return state;
   }
 

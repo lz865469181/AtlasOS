@@ -207,6 +207,8 @@ export class FeishuChannelSender implements ChannelSender {
   }
 
   async sendText(text: string, replyTo?: string): Promise<string> {
+    console.log(`[FeishuSender] sendText len=${text.length} replyTo=${replyTo} text="${text.slice(0, 80)}"`);
+    console.trace('[FeishuSender] sendText stack');
     const content = JSON.stringify({ text });
     try {
       if (replyTo) {

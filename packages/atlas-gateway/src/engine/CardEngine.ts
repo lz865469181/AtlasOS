@@ -176,21 +176,30 @@ export class CardEngineImpl implements CardEngine {
   // ── Private handlers ──────────────────────────────────────────────────
 
   private handleModelOutput(sessionId: string, chatId: string, msg: ModelOutputMessage): void {
+    console.log(`[CardEngine] handleModelOutput session=${sessionId} hasDelta=${!!msg.textDelta} hasFullText=${!!msg.fullText} deltaLen=${msg.textDelta?.length ?? 0}`);
     let sm = this.streamingSMs.get(sessionId);
 
     if (!sm) {
+      console.log(`[CardEngine] Creating new StreamingSM for session=${sessionId}`);
       sm = this.createStreamingSM();
 
-      // Create a streaming card
+      // Create a streaming card with a header so Feishu renders it as a proper card
       const cardState = this.cardStore.create(chatId, 'streaming', {
+        header: {
+          title: 'Thinking...',
+          icon: '\u{1F4AD}',
+          status: 'running',
+        },
         sections: [{ type: 'markdown', content: '' }],
       });
+      console.log(`[CardEngine] Created streaming card=${cardState.cardId} for chat=${chatId}`);
 
       // Wire up flush handler: update card content
       sm.onFlush(async (content, cardId) => {
+        const fullText = sm!.buffer.fullContent;
+        console.log(`[CardEngine] onFlush card=${cardId} contentLen=${content.length} fullTextLen=${fullText.length}`);
         this.cardStore.update(cardId, (state) => {
           // Replace the markdown section with accumulated text
-          const fullText = sm!.buffer.fullContent;
           state.content = {
             ...state.content,
             sections: [{ type: 'markdown', content: fullText }],
@@ -219,6 +228,42 @@ export class CardEngineImpl implements CardEngine {
   }
 
   private handleStatus(sessionId: string, chatId: string, msg: StatusMessage): void {
+    console.log(`[CardEngine] handleStatus session=${sessionId} status=${msg.status}`);
+    // When agent goes idle, finish any active streaming state machine
+    // so that remaining buffered content is flushed to the card.
+    if (msg.status === 'idle' || msg.status === 'stopped') {
+      const sm = this.streamingSMs.get(sessionId);
+      console.log(`[CardEngine] idle/stopped: SM exists=${!!sm} state=${sm?.state}`);
+      if (sm && sm.state !== 'completed' && sm.state !== 'cancelled' && sm.state !== 'error' && sm.state !== 'idle') {
+        console.log(`[CardEngine] Calling sm.finish() for session=${sessionId}`);
+        const cardId = sm.cardId;
+        sm.finish().then(() => {
+          // Update the streaming card header to "done" after final flush
+          if (cardId) {
+            try {
+              this.cardStore.update(cardId, (state) => {
+                state.content = {
+                  ...state.content,
+                  header: {
+                    title: 'Response',
+                    icon: '\u{2705}',
+                    status: 'done',
+                  },
+                };
+              });
+            } catch { /* card may already be disposed */ }
+          }
+        }).catch((e) => console.error(`[CardEngine] sm.finish() error:`, e));
+        this.streamingSMs.delete(sessionId);
+      }
+    }
+
+    // Skip status cards with empty body (no detail text) — they provide no useful info
+    if (!msg.detail) {
+      console.log(`[CardEngine] Skipping status card for status=${msg.status} (no detail)`);
+      return;
+    }
+
     const existingCardId = this.statusCards.get(sessionId);
 
     if (existingCardId) {
@@ -235,9 +280,7 @@ export class CardEngineImpl implements CardEngine {
             icon: '\u{2139}\u{FE0F}',
             status: headerStatus,
           },
-          sections: msg.detail
-            ? [{ type: 'note' as const, content: msg.detail }]
-            : [],
+          sections: [{ type: 'note' as const, content: msg.detail! }],
         };
         state.metadata['agentStatus'] = msg.status;
       });
@@ -254,9 +297,7 @@ export class CardEngineImpl implements CardEngine {
           icon: '\u{2139}\u{FE0F}',
           status: headerStatus,
         },
-        sections: msg.detail
-          ? [{ type: 'note', content: msg.detail }]
-          : [],
+        sections: [{ type: 'note', content: msg.detail! }],
       };
 
       const cardState = this.cardStore.create(chatId, 'status', content);
