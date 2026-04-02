@@ -24,6 +24,7 @@ export interface SessionInfo {
   lastActiveAt: number;
   lastPrompt?: string;
   chatHistory?: ChatEntry[];
+  displayName?: string;
 }
 
 export interface SessionManager {
@@ -38,6 +39,8 @@ export interface SessionManager {
   appendChat(chatId: string, threadKey: string | undefined, entry: ChatEntry): void;
   persist(): Promise<void>;
   restore(): Promise<void>;
+  registerExternal(opts: { sessionId: string; chatId: string; channelId: string; agentId: AgentId; displayName?: string }): SessionInfo;
+  removeBySessionId(sessionId: string): boolean;
 }
 
 export interface SerializedSessionStore {
@@ -151,12 +154,39 @@ export class SessionManagerImpl implements SessionManager {
     session.lastActiveAt = Date.now();
   }
 
+  registerExternal(opts: { sessionId: string; chatId: string; channelId: string; agentId: AgentId; displayName?: string }): SessionInfo {
+    const key = this.sessionLookupKey(opts.chatId);
+    const session: SessionInfo = {
+      sessionId: opts.sessionId,
+      chatId: opts.chatId,
+      channelId: opts.channelId,
+      agentId: opts.agentId,
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      createdAt: Date.now(),
+      lastActiveAt: Date.now(),
+      displayName: opts.displayName,
+    };
+    this.sessions.set(key, session);
+    return session;
+  }
+
+  removeBySessionId(sessionId: string): boolean {
+    for (const [key, session] of this.sessions) {
+      if (session.sessionId === sessionId) {
+        this.sessions.delete(key);
+        return true;
+      }
+    }
+    return false;
+  }
+
   async persist(): Promise<void> {
     const dir = join(this.filePath, '..');
     await mkdir(dir, { recursive: true });
 
     const data: SerializedSessionStore = {
-      sessions: Array.from(this.sessions.values()),
+      // Skip ephemeral beam sessions
+      sessions: Array.from(this.sessions.values()).filter(s => s.channelId !== 'beam'),
     };
 
     await writeFile(this.filePath, JSON.stringify(data, null, 2), 'utf-8');

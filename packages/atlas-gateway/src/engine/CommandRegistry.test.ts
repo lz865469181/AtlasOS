@@ -204,7 +204,8 @@ describe('CommandRegistry', () => {
       expect(names).toContain('new');
       expect(names).toContain('takeover');
       expect(names).toContain('help');
-      expect(commands).toHaveLength(8);
+      expect(names).toContain('list');
+      expect(commands).toHaveLength(9);
     });
 
     it('should include custom commands after registration', () => {
@@ -215,7 +216,7 @@ describe('CommandRegistry', () => {
       });
       const names = registry.listCommands().map((c) => c.name);
       expect(names).toContain('deploy');
-      expect(names).toHaveLength(9);
+      expect(names).toHaveLength(10);
     });
   });
 
@@ -330,7 +331,7 @@ describe('CommandRegistry', () => {
       const result = registry.resolve('/agent');
       const output = await result!.command.execute('gemini', ctx);
       expect(ctx.bridge.destroySession).toHaveBeenCalledWith('s1');
-      expect(ctx.sessionManager.switchAgent).toHaveBeenCalledWith('chat-1', 'gemini');
+      expect(ctx.sessionManager.switchAgent).toHaveBeenCalledWith('chat-1', undefined, 'gemini');
       expect(output).toBe('Switched to agent: gemini');
     });
 
@@ -345,7 +346,7 @@ describe('CommandRegistry', () => {
       const ctx = makeContext();
       const result = registry.resolve('/model');
       const output = await result!.command.execute('sonnet', ctx);
-      expect(ctx.sessionManager.setModel).toHaveBeenCalledWith('chat-1', 'sonnet');
+      expect(ctx.sessionManager.setModel).toHaveBeenCalledWith('chat-1', undefined, 'sonnet');
       expect(output).toBe('Model set to: sonnet');
     });
 
@@ -360,7 +361,7 @@ describe('CommandRegistry', () => {
       const ctx = makeContext();
       const result = registry.resolve('/mode');
       const output = await result!.command.execute('deny', ctx);
-      expect(ctx.sessionManager.setPermissionMode).toHaveBeenCalledWith('chat-1', 'deny');
+      expect(ctx.sessionManager.setPermissionMode).toHaveBeenCalledWith('chat-1', undefined, 'deny');
       expect(output).toBe('Permission mode set to: deny');
     });
 
@@ -376,7 +377,7 @@ describe('CommandRegistry', () => {
       const result = registry.resolve('/new');
       const output = await result!.command.execute('', ctx);
       expect(ctx.bridge.destroySession).toHaveBeenCalledWith('s1');
-      expect(ctx.sessionManager.destroy).toHaveBeenCalledWith('chat-1');
+      expect(ctx.sessionManager.destroy).toHaveBeenCalledWith('chat-1', undefined);
       expect(output).toBe('Session reset.');
     });
 
@@ -385,7 +386,7 @@ describe('CommandRegistry', () => {
       const result = registry.resolve('/takeover');
       const output = await result!.command.execute('target-s', ctx);
       expect(ctx.bridge.destroySession).toHaveBeenCalledWith('target-s');
-      expect(ctx.sessionManager.destroy).toHaveBeenCalledWith('chat-x');
+      expect(ctx.sessionManager.destroy).toHaveBeenCalledWith('chat-x', undefined);
       expect(output).toContain('Session taken over');
     });
 

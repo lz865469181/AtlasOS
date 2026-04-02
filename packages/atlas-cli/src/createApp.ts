@@ -1,3 +1,5 @@
+import express from 'express';
+import type { Server } from 'node:http';
 import { agentRegistry } from 'atlas-agent';
 import {
   CardStateStoreImpl,
@@ -107,6 +109,7 @@ export function createApp(config: AppConfig | AtlasConfig): App {
   // Clients created lazily inside start().
   let larkClient: LarkClient | null = null;
   let dingtalkClient: DingTalkClient | null = null;
+  let httpServer: Server | null = null;
 
   // 4. Channel-aware sender factory
   const senderFactory: SenderFactory = (chatId: string, channelIdHint?: string) => {
@@ -322,12 +325,73 @@ export function createApp(config: AppConfig | AtlasConfig): App {
         console.log('[atlas] DingTalk adapter started');
       }
 
+      // ── Beam HTTP API ──────────────────────────────────────────────
+      const apiApp = express();
+      apiApp.use(express.json());
+
+      apiApp.get('/api/status', (_req, res) => {
+        res.json({ ok: true });
+      });
+
+      apiApp.post('/api/beam/register', (req, res) => {
+        const { name, sessionId, agentId } = req.body ?? {};
+        if (!name || !sessionId) {
+          res.status(400).json({ error: 'name and sessionId are required' });
+          return;
+        }
+        const chatId = `beam:${name}`;
+        const session = sessionManager.registerExternal({
+          sessionId,
+          chatId,
+          channelId: 'beam',
+          agentId: agentId ?? 'claude',
+          displayName: name,
+        });
+        res.json({ ok: true, session: { sessionId: session.sessionId, chatId: session.chatId, displayName: session.displayName } });
+      });
+
+      apiApp.get('/api/beam/sessions', (_req, res) => {
+        const all = sessionManager.listActive();
+        const beamSessions = all
+          .filter(s => s.channelId === 'beam')
+          .map(s => ({
+            name: s.displayName ?? s.chatId.replace(/^beam:/, ''),
+            sessionId: s.sessionId,
+            agentId: s.agentId,
+            createdAt: s.createdAt,
+            lastActiveAt: s.lastActiveAt,
+          }));
+        res.json(beamSessions);
+      });
+
+      apiApp.delete('/api/beam/sessions/:name', (req, res) => {
+        const name = req.params.name;
+        const chatId = `beam:${name}`;
+        const all = sessionManager.listActive();
+        const session = all.find(s => s.channelId === 'beam' && s.chatId === chatId);
+        if (!session) {
+          res.json({ ok: false, message: 'not found' });
+          return;
+        }
+        sessionManager.removeBySessionId(session.sessionId);
+        res.json({ ok: true });
+      });
+
+      const apiPort = parseInt(process.env.BEAM_API_PORT ?? '20263', 10);
+      httpServer = apiApp.listen(apiPort, () => {
+        console.log(`[atlas] Beam API listening on port ${apiPort}`);
+      });
+
       const channels = Array.from(adapters.keys()).join(', ') || 'none';
       console.log(`[atlas] Started — active channels: ${channels}`);
     },
 
     async stop() {
       console.log('[atlas] Shutting down...');
+      if (httpServer) {
+        httpServer.close();
+        httpServer = null;
+      }
       for (const [id, adapter] of adapters) {
         await adapter.stop();
         console.log(`[atlas] ${id} adapter stopped`);

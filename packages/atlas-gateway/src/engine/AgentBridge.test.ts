@@ -35,6 +35,7 @@ function makeCardEngine(): CardEngineImpl {
     handleMessage: vi.fn(),
     handlePermissionResponse: vi.fn(),
     getStreamingState: vi.fn(),
+    setReplyTarget: vi.fn(),
     dispose: vi.fn(),
   } as unknown as CardEngineImpl;
 }

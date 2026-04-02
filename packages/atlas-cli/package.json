@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "bin": {
-    "atlas": "dist/index.js"
+    "atlas": "dist/index.js",
+    "beam": "dist/beam.js"
   },
   "scripts": {
     "build": "tsc",
@@ -14,9 +15,11 @@
   "dependencies": {
     "atlas-agent": "3.0.0",
     "atlas-gateway": "3.0.0",
-    "dotenv": "^16.4.0"
+    "dotenv": "^16.4.0",
+    "express": "^4.21.2"
   },
   "devDependencies": {
+    "@types/express": "^5.0.0",
     "@types/node": "^22.13.0",
     "@vitest/mocker": "^4.1.2",
     "typescript": "^5.7.0",

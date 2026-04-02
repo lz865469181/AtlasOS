@@ -38,12 +38,12 @@ describe('SessionManager', () => {
     });
 
     it('creates session with specified agentId', async () => {
-      const session = await manager.getOrCreate('chat-1', 'codex');
+      const session = await manager.getOrCreate('chat-1', undefined, 'codex');
       expect(session.agentId).toBe('codex');
     });
 
     it('creates session with specified channelId', async () => {
-      const session = await manager.getOrCreate('chat-1', undefined, 'dingtalk');
+      const session = await manager.getOrCreate('chat-1', undefined, undefined, 'dingtalk');
       expect(session.channelId).toBe('dingtalk');
     });
 
@@ -90,8 +90,8 @@ describe('SessionManager', () => {
 
   describe('switchAgent', () => {
     it('destroys old session and creates new one', async () => {
-      const first = await manager.getOrCreate('chat-1', 'claude');
-      const second = await manager.switchAgent('chat-1', 'codex');
+      const first = await manager.getOrCreate('chat-1', undefined, 'claude');
+      const second = await manager.switchAgent('chat-1', undefined, 'codex');
       expect(second.agentId).toBe('codex');
       expect(second.sessionId).not.toBe(first.sessionId);
     });
@@ -102,13 +102,13 @@ describe('SessionManager', () => {
   describe('setModel', () => {
     it('sets model and updates lastActiveAt', async () => {
       await manager.getOrCreate('chat-1');
-      manager.setModel('chat-1', 'gpt-4o');
+      manager.setModel('chat-1', undefined, 'gpt-4o');
       const session = manager.get('chat-1');
       expect(session!.model).toBe('gpt-4o');
     });
 
     it('is a no-op for nonexistent chatId', () => {
-      manager.setModel('nope', 'gpt-4o'); // should not throw
+      manager.setModel('nope', undefined, 'gpt-4o'); // should not throw
     });
   });
 
@@ -117,12 +117,12 @@ describe('SessionManager', () => {
   describe('setPermissionMode', () => {
     it('sets permission mode', async () => {
       await manager.getOrCreate('chat-1');
-      manager.setPermissionMode('chat-1', 'strict');
+      manager.setPermissionMode('chat-1', undefined, 'strict');
       expect(manager.get('chat-1')!.permissionMode).toBe('strict');
     });
 
     it('is a no-op for nonexistent chatId', () => {
-      manager.setPermissionMode('nope', 'strict');
+      manager.setPermissionMode('nope', undefined, 'strict');
     });
   });
 

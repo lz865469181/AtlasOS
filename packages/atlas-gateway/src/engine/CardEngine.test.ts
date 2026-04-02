@@ -144,7 +144,7 @@ describe('CardEngine', () => {
     });
 
     it('maps error status correctly', () => {
-      const msg: StatusMessage = { type: 'status', status: 'error' };
+      const msg: StatusMessage = { type: 'status', status: 'error', detail: 'Something failed' };
       engine.handleMessage(SESSION, CHAT, msg);
 
       const cards = deps.cardStore.getActiveByChatId(CHAT);
@@ -152,17 +152,17 @@ describe('CardEngine', () => {
       expect(statusCard!.content.header?.status).toBe('error');
     });
 
-    it('creates empty sections when no detail', () => {
+    it('skips status card when no detail', () => {
       const msg: StatusMessage = { type: 'status', status: 'running' };
       engine.handleMessage(SESSION, CHAT, msg);
 
       const cards = deps.cardStore.getActiveByChatId(CHAT);
       const statusCard = cards.find((c) => c.type === 'status');
-      expect(statusCard!.content.sections).toHaveLength(0);
+      expect(statusCard).toBeUndefined();
     });
 
     it('stores agentStatus in metadata', () => {
-      const msg: StatusMessage = { type: 'status', status: 'running' };
+      const msg: StatusMessage = { type: 'status', status: 'running', detail: 'Processing' };
       engine.handleMessage(SESSION, CHAT, msg);
 
       const cards = deps.cardStore.getActiveByChatId(CHAT);
@@ -484,10 +484,11 @@ describe('CardEngine', () => {
 
   describe('token-count', () => {
     it('updates status card metadata with token counts', () => {
-      // First create a status card
+      // First create a status card (detail required for card creation)
       engine.handleMessage(SESSION, CHAT, {
         type: 'status',
         status: 'running',
+        detail: 'Processing',
       } as StatusMessage);
 
       // Then send token count

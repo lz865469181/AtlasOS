@@ -26,36 +26,55 @@ export const ListCommand: Command = {
     }
 
     const sessions = context.sessionManager.listByChatId(context.chatId);
+    const allActive = context.sessionManager.listActive();
+    const beamSessions = allActive.filter(s => s.channelId === 'beam');
 
-    if (sessions.length === 0) {
-      return 'No active sessions in this chat.';
+    if (sessions.length === 0 && beamSessions.length === 0) {
+      return 'No active sessions.';
     }
 
-    const lines: string[] = [`**Sessions (${sessions.length})**\n`];
+    const lines: string[] = [];
 
-    for (let i = 0; i < sessions.length; i++) {
-      const session = sessions[i];
-      const threadInfo = session.threadKey ? `thread:${session.threadKey.slice(0, 8)}` : 'main';
-      const active = timeAgo(session.lastActiveAt);
+    // Chat-specific sessions
+    if (sessions.length > 0) {
+      lines.push(`**Chat Sessions (${sessions.length})**\n`);
 
-      lines.push(`${i + 1}. 🟢 **${session.agentId}** [${threadInfo}] — ${active}`);
+      for (let i = 0; i < sessions.length; i++) {
+        const session = sessions[i];
+        const threadInfo = session.threadKey ? `thread:${session.threadKey.slice(0, 8)}` : 'main';
+        const active = timeAgo(session.lastActiveAt);
 
-      // Show last 4 chat entries (2 pairs)
-      const history = session.chatHistory;
-      if (history && history.length > 0) {
-        const recent = history.slice(-4);
-        for (const entry of recent) {
-          const icon = entry.role === 'user' ? '👤' : '🤖';
-          const text = truncate(entry.text, 60);
-          lines.push(`   ${icon} ${text}`);
+        lines.push(`${i + 1}. 🟢 **${session.agentId}** [${threadInfo}] — ${active}`);
+
+        // Show last 4 chat entries (2 pairs)
+        const history = session.chatHistory;
+        if (history && history.length > 0) {
+          const recent = history.slice(-4);
+          for (const entry of recent) {
+            const icon = entry.role === 'user' ? '👤' : '🤖';
+            const text = truncate(entry.text, 60);
+            lines.push(`   ${icon} ${text}`);
+          }
+        } else if (session.lastPrompt) {
+          lines.push(`   👤 ${truncate(session.lastPrompt, 60)}`);
         }
-      } else if (session.lastPrompt) {
-        lines.push(`   👤 ${truncate(session.lastPrompt, 60)}`);
-      }
 
-      // Add spacing between sessions
-      if (i < sessions.length - 1) {
-        lines.push('');
+        if (i < sessions.length - 1) {
+          lines.push('');
+        }
+      }
+    }
+
+    // Beam sessions
+    if (beamSessions.length > 0) {
+      if (lines.length > 0) lines.push('');
+      lines.push(`**Beam Sessions (${beamSessions.length})**\n`);
+
+      for (let i = 0; i < beamSessions.length; i++) {
+        const session = beamSessions[i];
+        const label = session.displayName ?? session.chatId.replace(/^beam:/, '');
+        const active = timeAgo(session.lastActiveAt);
+        lines.push(`${i + 1}. 🔵 **${label}** [${session.agentId}] — ${active}`);
       }
     }
 

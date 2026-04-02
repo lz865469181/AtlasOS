@@ -9,7 +9,7 @@ export interface SessionManagerLike {
   setModel(chatId: string, threadKey: string | undefined, model: string): void;
   setPermissionMode(chatId: string, threadKey: string | undefined, mode: string): void;
   destroy(chatId: string, threadKey?: string): Promise<void>;
-  listActive(): Array<{ sessionId: string; chatId: string; agentId: string; threadKey?: string }>;
+  listActive(): Array<{ sessionId: string; chatId: string; agentId: string; threadKey?: string; channelId: string; displayName?: string; createdAt: number; lastActiveAt: number }>;
   listByChatId?(chatId: string): Array<{ sessionId: string; chatId: string; agentId: string; threadKey?: string; createdAt: number; lastActiveAt: number; lastPrompt?: string; chatHistory?: Array<{ role: 'user' | 'assistant'; text: string; ts: number }> }>;
 }
 
