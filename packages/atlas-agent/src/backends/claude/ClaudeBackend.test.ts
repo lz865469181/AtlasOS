@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { AgentMessage } from '../../core/AgentMessage.js';
 
 // ---- mock Anthropic SDK ----
@@ -18,6 +18,20 @@ vi.mock('@anthropic-ai/sdk', () => {
         constructedInstances.push({ opts, messages: this.messages });
       }
     },
+  };
+});
+
+// Mock readFileSync to prevent ~/.claude/settings.json from leaking into tests
+vi.mock('node:fs', async () => {
+  const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+  return {
+    ...actual,
+    readFileSync: vi.fn((path: string, ...args: any[]) => {
+      if (typeof path === 'string' && path.includes('.claude') && path.includes('settings.json')) {
+        return JSON.stringify({ env: {} });
+      }
+      return actual.readFileSync(path, ...args);
+    }),
   };
 });
 
@@ -49,12 +63,30 @@ describe('ClaudeBackend', () => {
   let backend: InstanceType<typeof ClaudeBackend>;
   let messages: AgentMessage[];
 
+  // Isolate env vars that ClaudeBackend reads from process.env
+  const envKeysToIsolate = ['ANTHROPIC_BASE_URL', 'ANTHROPIC_API_KEY'];
+  const savedEnv: Record<string, string | undefined> = {};
+
   beforeEach(() => {
+    for (const key of envKeysToIsolate) {
+      savedEnv[key] = process.env[key];
+      delete process.env[key];
+    }
     vi.clearAllMocks();
     constructedInstances.length = 0;
     backend = new ClaudeBackend({ cwd: '/tmp', env: { ANTHROPIC_API_KEY: 'test-key' } });
     messages = collectMessages(backend);
     setupStreamResponse('Hello world');
+  });
+
+  afterEach(() => {
+    for (const key of envKeysToIsolate) {
+      if (savedEnv[key] !== undefined) {
+        process.env[key] = savedEnv[key];
+      } else {
+        delete process.env[key];
+      }
+    }
   });
 
   it('startSession returns sessionId and emits starting then idle', async () => {

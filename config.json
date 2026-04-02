@@ -2,6 +2,7 @@
   "agent": {
     "backend": "claude",
     "anthropic_api_key": "ENC:rjrG91UDsJgq3bDgD0atSIo+UdP1u9WlutGeqcxwGdqP+xrtPL9rF8P+wVlpcHFxuLHBgrGu5h3Uzx47eeJImDCPtpFw8a2rn5cjfIGgIQ==",
+    "anthropic_base_url": "",
     "bash": {
       "allowed_commands": [
         "ls",

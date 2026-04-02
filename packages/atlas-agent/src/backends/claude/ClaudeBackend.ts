@@ -110,7 +110,11 @@ export class ClaudeBackend implements AgentBackend {
 
     this.emit({ type: 'status', status: 'running' });
 
-    session.messages.push({ role: 'user', content: prompt });
+    // Stateless: each prompt is independent (no conversation history).
+    // Context memory is managed by Claude's own conversation, not by us.
+    const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [
+      { role: 'user', content: prompt },
+    ];
 
     // Fresh abort controller per request
     session.abortController = new AbortController();
@@ -121,7 +125,7 @@ export class ClaudeBackend implements AgentBackend {
           model: this.model,
           max_tokens: this.maxTokens,
           ...(this.systemPrompt ? { system: this.systemPrompt } : {}),
-          messages: session.messages,
+          messages,
         },
         { signal: session.abortController.signal },
       );
@@ -137,11 +141,12 @@ export class ClaudeBackend implements AgentBackend {
         .map((block) => block.text)
         .join('');
 
-      session.messages.push({ role: 'assistant', content: fullText });
+      if (fullText) {
+        this.emit({ type: 'model-output', fullText });
+      }
 
-      // Note: we do NOT emit { type: 'model-output', fullText } here because
-      // the text was already streamed via textDelta events. Emitting fullText
-      // again would cause the StreamingStateMachine to duplicate all content.
+      // No history accumulation — each request is standalone.
+
       this.emit({ type: 'status', status: 'idle' });
     } catch (err: unknown) {
       // Don't emit error for intentional abort

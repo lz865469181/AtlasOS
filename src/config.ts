@@ -68,6 +68,7 @@ export interface AgentConfig {
   /** Path to the OpenCode CLI binary. */
   opencode_cli_path: string;
   anthropic_api_key: string;
+  anthropic_base_url: string;
   claude_api_key: string;
   timeout: string;
   max_retries: number;
