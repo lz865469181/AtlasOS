@@ -130,6 +130,9 @@ Expected output:
 1. Open Feishu and find your bot (by the app name you configured)
 2. Send any message — the bot calls Claude API and streams the response back
 3. You should see streaming text responses in the chat
+4. Try `/help` to see all available slash commands
+5. Try `/list` to see active sessions with recent chat history
+6. Reply in a Feishu thread/topic — the bot creates a separate session for each thread
 
 ## Running as a Background Service
 
@@ -240,7 +243,8 @@ feishu-ai-assistant/
 │   │       └── transport/        # Transport abstractions
 │   ├── atlas-gateway/            # Engine, channels, cards, sessions
 │   │   └── src/
-│   │       ├── engine/           # Engine, SessionManager, IdleWatcher
+│   │       ├── engine/           # Engine, SessionManager, IdleWatcher, CommandRegistry
+│   │       │   └── commands/     # Slash commands (new, cancel, agent, model, list, etc.)
 │   │       ├── channel/          # Feishu/DingTalk adapters
 │   │       ├── cards/            # Interactive card system
 │   │       └── config/           # ConfigLoader, ConfigSchema
@@ -411,3 +415,5 @@ Output: ✓ 541 tests passed
 | `yarn build` fails | Run `yarn install` first; ensure Node.js >= 18 |
 | `@vitest/mocker` missing | Run `yarn install` (it's in devDependencies) |
 | Idle notifications show bare UUIDs | Update to latest version — now shows chat/agent/message context |
+| Slash commands not intercepted | Kill all node processes and restart — multiple instances compete for WebSocket |
+| `/list` shows "No active sessions" | Sessions are created when you send a regular message, not by commands |

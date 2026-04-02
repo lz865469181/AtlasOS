@@ -12,9 +12,10 @@
 - **Multi-Channel** — Feishu/Lark (WebSocket) + DingTalk (Stream/Webhook)
 - **Streaming Responses** — Real-time token streaming via interactive cards
 - **Interactive Permission Cards** — Tool calls require Allow / Deny approval
-- **Per-Chat Sessions** — Isolated conversation history per chat
+- **Thread-Aware Sessions** — Isolated sessions per chat thread (Feishu topic replies create separate sessions)
+- **Chat History Tracking** — Lightweight ring buffer records recent user/assistant messages per session
 - **Idle Session Notifications** — Rich context (agent, last message, session age) when sessions go idle
-- **Slash Commands** — `/new`, `/stop`, `/model`, `/sessions`, etc.
+- **Slash Commands** — `/new`, `/cancel`, `/agent`, `/model`, `/mode`, `/status`, `/list`, `/takeover`, `/help`
 - **Session Queue** — Messages from the same chat serialized; different chats run concurrently
 - **Pluggable Agent Registry** — Register new AI backends with `agentRegistry.register(id, factory)`
 
@@ -31,30 +32,35 @@ packages/
 ```
 
 ```
-                      ┌─────────────────────────────────────┐
-                      │            Engine (gateway)          │
-                      │  ┌──────────┐  ┌────────────────┐   │
-Feishu ──WebSocket──► │  │ Commands │  │ SessionManager │   │
-DingTalk ─Stream────► │  │ Registry │  │  + IdleWatcher │   │
-                      │  └──────────┘  └───────┬────────┘   │
-                      │                        │             │
-                      │          ┌─────────────▼──────┐      │
-                      │          │   AgentBridge       │      │
-                      │          │   → AgentRegistry   │      │
-                      │          │   → ClaudeBackend   │      │
-                      │          └─────────────────────┘      │
-                      └─────────────────────────────────────┘
+                      ┌──────────────────────────────────────────┐
+                      │              Engine (gateway)             │
+                      │  ┌──────────┐  ┌──────────────────────┐  │
+Feishu ──WebSocket──► │  │ Command  │  │   SessionManager     │  │
+DingTalk ─Stream────► │  │ Registry │  │ (thread-aware keys)  │  │
+                      │  └──────────┘  │ + ChatHistory ring   │  │
+                      │                │ + IdleWatcher        │  │
+                      │                └──────────┬───────────┘  │
+                      │                           │              │
+                      │             ┌─────────────▼──────┐       │
+                      │             │   AgentBridge       │       │
+                      │             │   → AgentRegistry   │       │
+                      │             │   → ClaudeBackend   │       │
+                      │             └─────────────────────┘       │
+                      └──────────────────────────────────────────┘
 ```
 
 **How it works:**
 
 1. Feishu/DingTalk message arrives via WebSocket/Stream
-2. `Engine.handleChannelEvent()` routes to command or agent
-3. `SessionManager` creates/retrieves per-chat session
-4. `AgentBridge` delegates to `ClaudeBackend` via `agentRegistry`
-5. `ClaudeBackend` calls Anthropic `messages.stream()` API
-6. Streaming tokens flow back through `CardRenderPipeline` → channel sender
-7. `IdleWatcher` fires rich context notifications when sessions go idle
+2. `Engine.handleChannelEvent()` extracts text and computes `threadKey` (threadId or messageId)
+3. If text starts with `/`, `CommandRegistry` resolves and executes the command
+4. Otherwise, `SessionManager` creates/retrieves a session keyed by `chatId:threadKey`
+5. User message is recorded in the session's chat history ring buffer (max 10 entries)
+6. `AgentBridge` delegates to `ClaudeBackend` via `agentRegistry`
+7. `ClaudeBackend` calls Anthropic `messages.stream()` API
+8. Streaming tokens flow back through `CardRenderPipeline` → channel sender
+9. Assistant response is recorded in chat history
+10. `IdleWatcher` fires rich context notifications when sessions go idle
 
 ## Quick Start
 
@@ -180,13 +186,17 @@ These are passed to the Claude backend via `agent.env`:
 
 | Command | Aliases | Description |
 |---------|---------|-------------|
-| `/new` | `/reset` | Create new session (clear context) |
-| `/stop` | — | Stop current agent execution |
-| `/sessions` | `/ss` | List active sessions |
-| `/resume <name>` | `/rs` | Resume a parked session |
-| `/model` | `/m` | Switch AI model |
-| `/help` | `/h` | List available commands |
-| `/status` | — | Show server and session status |
+| `/new` | — | Create new session (clear context) |
+| `/cancel` | — | Cancel the current agent execution |
+| `/agent <id>` | `/a` | Switch agent backend (e.g., `/agent claude`) |
+| `/model <name>` | `/m` | Switch AI model |
+| `/mode <mode>` | — | Set permission mode (`auto` / `confirm` / `deny`) |
+| `/status` | `/s` | Show current session info (agent, model, mode, age) |
+| `/list` | `/l` | List all sessions in this chat with recent chat history |
+| `/takeover <id>` | — | Take over an idle session by session ID |
+| `/help` | `/h`, `/?` | List available commands |
+
+Commands support **prefix matching** — e.g., `/li` resolves to `/list`, `/ag` to `/agent`.
 
 ## Development
 
@@ -278,17 +288,27 @@ cd packages/atlas-gateway && npx vitest --watch
 
 Test coverage: 541+ tests across gateway, 9+ tests for Claude backend.
 
+## Session Chat History
+
+Each session maintains a lightweight chat history (ring buffer, max 10 entries, text truncated to 100 chars). This powers the `/list` command:
+
+```
+Sessions (2)
+
+1. 🟢 claude [thread:abc12345] — 5m ago
+   👤 帮我修复登录bug
+   🤖 已修复，问题在于token过期未刷新...
+
+2. 🟢 claude [main] — 2h ago
+   👤 重构用户模块
+   🤖 已完成，拆分为3个子模块...
+```
+
+Chat history is recorded automatically for both user messages and assistant responses, and persisted across restarts.
+
 ## Idle Session Notifications
 
-When a session is idle for the configured timeout (default 10 minutes), the bot sends a rich notification:
-
-```
-Chat: `oc_xxx`
-Agent: `claude`
-Last message: 帮我查一下这个 bug 的根因...
-Session age: 25 min | Idle: 10 min
-Reply `/takeover fac1d46d-...` to take over.
-```
+When a session is idle for the configured timeout (default 10 minutes), the bot sends a rich notification card with agent name, session age, and last message preview. Use `/takeover <sessionId>` to resume.
 
 Configure the timeout via `ATLAS_IDLE_TIMEOUT` (ms) or `idleTimeoutMs` in `atlas.config.json`.
 
