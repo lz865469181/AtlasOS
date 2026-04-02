@@ -58,6 +58,7 @@ function mockSessionManager(): SessionManagerImpl {
     setModel: vi.fn(),
     setPermissionMode: vi.fn(),
     listActive: vi.fn(() => []),
+    appendChat: vi.fn(),
     persist: vi.fn(async () => {}),
     restore: vi.fn(async () => {}),
   } as unknown as SessionManagerImpl;
@@ -264,7 +265,7 @@ describe('Engine', () => {
       await engine.handleChannelEvent(event);
 
       expect(deps.commandRegistry.resolve).toHaveBeenCalledWith('/unknown-cmd');
-      expect(deps.sessionManager.getOrCreate).toHaveBeenCalledWith('chat-1', undefined, 'ch-1');
+      expect(deps.sessionManager.getOrCreate).toHaveBeenCalledWith('chat-1', 'msg-evt-1', undefined, 'ch-1');
       expect(onPrompt).toHaveBeenCalled();
     });
 
@@ -277,7 +278,7 @@ describe('Engine', () => {
       await engine.handleChannelEvent(event);
 
       expect(deps.commandRegistry.resolve).not.toHaveBeenCalled();
-      expect(deps.sessionManager.getOrCreate).toHaveBeenCalledWith('chat-1', undefined, 'ch-1');
+      expect(deps.sessionManager.getOrCreate).toHaveBeenCalledWith('chat-1', 'msg-evt-1', undefined, 'ch-1');
       expect(onPrompt).toHaveBeenCalledWith(
         expect.objectContaining({ sessionId: 'session-chat-1', chatId: 'chat-1' }),
         event,
@@ -293,7 +294,7 @@ describe('Engine', () => {
       await engine.handleChannelEvent(event);
 
       expect(deps.commandRegistry.resolve).not.toHaveBeenCalled();
-      expect(deps.sessionManager.getOrCreate).toHaveBeenCalledWith('chat-1', undefined, 'ch-1');
+      expect(deps.sessionManager.getOrCreate).toHaveBeenCalledWith('chat-1', 'msg-evt-img', undefined, 'ch-1');
       expect(onPrompt).toHaveBeenCalled();
     });
 
@@ -301,7 +302,7 @@ describe('Engine', () => {
       const event = textEvent('Hello');
       await engine.handleChannelEvent(event);
 
-      expect(deps.sessionManager.getOrCreate).toHaveBeenCalledWith('chat-1', undefined, 'ch-1');
+      expect(deps.sessionManager.getOrCreate).toHaveBeenCalledWith('chat-1', 'msg-evt-1', undefined, 'ch-1');
       // Should not throw
     });
 
@@ -313,7 +314,7 @@ describe('Engine', () => {
       const event = textEvent('Hello', { channelId: 'dingtalk', chatId: 'dt-chat-1' });
       await engine.handleChannelEvent(event);
 
-      expect(deps.sessionManager.getOrCreate).toHaveBeenCalledWith('dt-chat-1', undefined, 'dingtalk');
+      expect(deps.sessionManager.getOrCreate).toHaveBeenCalledWith('dt-chat-1', 'msg-evt-1', undefined, 'dingtalk');
     });
 
     it('provides correct CommandContext with sender from senderFactory', async () => {
@@ -425,8 +426,8 @@ describe('Engine', () => {
       await engine.handleChannelEvent(textEvent('First message', { chatId: 'chat-a' }));
       await engine.handleChannelEvent(textEvent('Second message', { chatId: 'chat-b' }));
 
-      expect(deps.sessionManager.getOrCreate).toHaveBeenCalledWith('chat-a', undefined, 'ch-1');
-      expect(deps.sessionManager.getOrCreate).toHaveBeenCalledWith('chat-b', undefined, 'ch-1');
+      expect(deps.sessionManager.getOrCreate).toHaveBeenCalledWith('chat-a', 'msg-evt-1', undefined, 'ch-1');
+      expect(deps.sessionManager.getOrCreate).toHaveBeenCalledWith('chat-b', 'msg-evt-1', undefined, 'ch-1');
       expect(onPrompt).toHaveBeenCalledTimes(2);
     });
   });

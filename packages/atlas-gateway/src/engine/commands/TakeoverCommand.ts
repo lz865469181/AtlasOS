@@ -19,7 +19,7 @@ export const TakeoverCommand: Command = {
     }
 
     await context.bridge.destroySession(targetSessionId);
-    await context.sessionManager.destroy(target.chatId);
+    await context.sessionManager.destroy(target.chatId, target.threadKey);
     return 'Session taken over. Previous process can be terminated.';
   },
 };

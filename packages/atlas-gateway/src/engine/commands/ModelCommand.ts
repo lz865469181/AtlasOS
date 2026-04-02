@@ -5,7 +5,7 @@ export const ModelCommand: Command = {
   description: 'Switch the AI model for the current session.',
   async execute(args: string, context: CommandContext): Promise<string> {
     const modelName = args.trim();
-    const session = context.sessionManager.get(context.chatId);
+    const session = context.sessionManager.get(context.chatId, context.threadKey);
 
     if (!modelName) {
       const current = session?.model ?? '(default)';
@@ -16,7 +16,7 @@ export const ModelCommand: Command = {
       return 'No active session. Send a message first.';
     }
 
-    context.sessionManager.setModel(context.chatId, modelName);
+    context.sessionManager.setModel(context.chatId, context.threadKey, modelName);
     return `Model set to: ${modelName}`;
   },
 };

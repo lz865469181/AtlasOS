@@ -7,7 +7,7 @@ export const ModeCommand: Command = {
   description: 'Set the permission mode (auto / confirm / deny).',
   async execute(args: string, context: CommandContext): Promise<string> {
     const mode = args.trim().toLowerCase();
-    const session = context.sessionManager.get(context.chatId);
+    const session = context.sessionManager.get(context.chatId, context.threadKey);
 
     if (!mode) {
       const current = session?.permissionMode ?? '(unknown)';
@@ -22,7 +22,7 @@ export const ModeCommand: Command = {
       return 'No active session. Send a message first.';
     }
 
-    context.sessionManager.setPermissionMode(context.chatId, mode);
+    context.sessionManager.setPermissionMode(context.chatId, context.threadKey, mode);
     return `Permission mode set to: ${mode}`;
   },
 };

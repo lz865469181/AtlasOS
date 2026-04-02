@@ -4,12 +4,13 @@ import type { ChannelSender } from '../channel/ChannelSender.js';
 // ── Interfaces ──────────────────────────────────────────────────────────────
 
 export interface SessionManagerLike {
-  get(chatId: string): { sessionId: string; agentId: string; model?: string; permissionMode: string; createdAt: number } | undefined;
-  switchAgent(chatId: string, agentId: string): Promise<unknown>;
-  setModel(chatId: string, model: string): void;
-  setPermissionMode(chatId: string, mode: string): void;
-  destroy(chatId: string): Promise<void>;
-  listActive(): Array<{ sessionId: string; chatId: string; agentId: string }>;
+  get(chatId: string, threadKey?: string): { sessionId: string; agentId: string; model?: string; permissionMode: string; createdAt: number; threadKey?: string } | undefined;
+  switchAgent(chatId: string, threadKey: string | undefined, agentId: string): Promise<unknown>;
+  setModel(chatId: string, threadKey: string | undefined, model: string): void;
+  setPermissionMode(chatId: string, threadKey: string | undefined, mode: string): void;
+  destroy(chatId: string, threadKey?: string): Promise<void>;
+  listActive(): Array<{ sessionId: string; chatId: string; agentId: string; threadKey?: string }>;
+  listByChatId?(chatId: string): Array<{ sessionId: string; chatId: string; agentId: string; threadKey?: string; createdAt: number; lastActiveAt: number; lastPrompt?: string; chatHistory?: Array<{ role: 'user' | 'assistant'; text: string; ts: number }> }>;
 }
 
 export interface BridgeLike {
@@ -20,6 +21,7 @@ export interface BridgeLike {
 export interface CommandContext {
   chatId: string;
   userId: string;
+  threadKey?: string;
   sessionManager: SessionManagerLike;
   bridge: BridgeLike;
   sender: ChannelSender;
@@ -45,6 +47,7 @@ import { ModelCommand } from './commands/ModelCommand.js';
 import { ModeCommand } from './commands/ModeCommand.js';
 import { NewCommand } from './commands/NewCommand.js';
 import { TakeoverCommand } from './commands/TakeoverCommand.js';
+import { ListCommand } from './commands/ListCommand.js';
 
 // ── Built-in commands ───────────────────────────────────────────────────────
 
@@ -53,7 +56,7 @@ const helpCommand: Command = {
   aliases: ['h', '?'],
   description: 'Show available commands.',
   execute: async () =>
-    'Available commands: /agent, /model, /mode, /cancel, /status, /new, /takeover, /help',
+    'Available commands: /agent, /model, /mode, /cancel, /status, /new, /takeover, /list, /help',
 };
 
 const builtinCommands: Command[] = [
@@ -64,6 +67,7 @@ const builtinCommands: Command[] = [
   StatusCommand,
   NewCommand,
   TakeoverCommand,
+  ListCommand,
   helpCommand,
 ];
 

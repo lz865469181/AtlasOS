@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
-import { createSessionsCommand, createResumeCommand } from "./builtins.js";
+import { createSessionsCommand, createResumeCommand, createListCommand } from "./builtins.js";
 import { ParkedSessionStore } from "../session/parked.js";
+import { SessionManager } from "../session/manager.js";
 import type { CommandContext } from "./registry.js";
 
 function mockCtx(args = ""): CommandContext & { replies: string[]; cards: string[] } {
@@ -17,6 +18,12 @@ function mockCtx(args = ""): CommandContext & { replies: string[]; cards: string
     replies,
     cards,
   };
+}
+
+function mockEngine(opts?: { parked?: ParkedSessionStore; sessions?: SessionManager }) {
+  const parkedSessions = opts?.parked ?? new ParkedSessionStore();
+  const sessionMgr = opts?.sessions ?? new SessionManager(3_600_000);
+  return { parkedSessions, sessionMgr } as any;
 }
 
 describe("/sessions command", () => {
@@ -72,5 +79,118 @@ describe("/resume command", () => {
     expect(resumeFn).toHaveBeenCalledWith("abc", expect.objectContaining({ userID: "user-1" }));
     expect(store.get("my-task")).toBeUndefined();
     expect(ctx.replies.some((r) => r.includes("Resumed"))).toBe(true);
+  });
+});
+
+describe("/list command", () => {
+  it("shows empty message when no sessions exist", async () => {
+    const engine = mockEngine();
+    const cmd = createListCommand(engine);
+    const ctx = mockCtx();
+    await cmd.handler(ctx);
+    const all = ctx.replies.join(" ");
+    expect(all).toContain("No sessions");
+  });
+
+  it("shows active sessions with chat history", async () => {
+    const sessions = new SessionManager(3_600_000);
+    const meta = sessions.getOrCreate("proj:user1", "user1", "claude");
+    meta.model = "claude-sonnet-4-6";
+    sessions.appendChat("proj:user1", { role: "user", text: "帮我修复登录bug", ts: Date.now() - 5000 });
+    sessions.appendChat("proj:user1", { role: "assistant", text: "已修复，问题在于token过期未刷新", ts: Date.now() });
+
+    const engine = mockEngine({ sessions });
+    const cmd = createListCommand(engine);
+    const ctx = mockCtx();
+    await cmd.handler(ctx);
+    const all = ctx.replies.join(" ");
+    expect(all).toContain("All Sessions");
+    expect(all).toContain("proj:user1");
+    expect(all).toContain("Active");
+    expect(all).toContain("👤");
+    expect(all).toContain("🤖");
+    expect(all).toContain("帮我修复登录bug");
+    expect(all).toContain("已修复");
+  });
+
+  it("shows parked sessions alongside active sessions", async () => {
+    const sessions = new SessionManager(3_600_000);
+    sessions.getOrCreate("proj:user1", "user1", "claude");
+
+    const parked = new ParkedSessionStore();
+    parked.park({ name: "refactor", cliSessionId: "id2", status: "parked", startedAt: Date.now() - 7200_000, parkedAt: Date.now() - 3600_000 });
+
+    const engine = mockEngine({ sessions, parked });
+    const cmd = createListCommand(engine);
+    const ctx = mockCtx();
+    await cmd.handler(ctx);
+    const all = ctx.replies.join(" ");
+    expect(all).toContain("proj:user1");
+    expect(all).toContain("refactor");
+    expect(all).toContain("Parked");
+  });
+
+  it("deduplicates parked sessions that share cliSessionId with active sessions", async () => {
+    const sessions = new SessionManager(3_600_000);
+    const meta = sessions.getOrCreate("proj:user1", "user1", "claude");
+    meta.cliSessionId = "shared-cli-id";
+
+    const parked = new ParkedSessionStore();
+    // Same cliSessionId as the active session — should be deduped
+    parked.park({ name: "my-project", cliSessionId: "shared-cli-id", status: "running", startedAt: Date.now() - 60_000, parkedAt: Date.now() });
+    // Different cliSessionId — should still appear
+    parked.park({ name: "other-project", cliSessionId: "other-cli-id", status: "parked", startedAt: Date.now() - 7200_000, parkedAt: Date.now() - 3600_000 });
+
+    const engine = mockEngine({ sessions, parked });
+    const cmd = createListCommand(engine);
+    const ctx = mockCtx();
+    await cmd.handler(ctx);
+    const all = ctx.replies.join(" ");
+    // Active session should appear
+    expect(all).toContain("proj:user1");
+    // Parked session with same cliSessionId should NOT appear (deduped)
+    expect(all).not.toContain("my-project");
+    // Different parked session should appear
+    expect(all).toContain("other-project");
+  });
+
+  it("truncates long chat messages", async () => {
+    const sessions = new SessionManager(3_600_000);
+    sessions.getOrCreate("proj:user1", "user1", "claude");
+    const longText = "a".repeat(200);
+    sessions.appendChat("proj:user1", { role: "user", text: longText, ts: Date.now() });
+
+    const engine = mockEngine({ sessions });
+    const cmd = createListCommand(engine);
+    const ctx = mockCtx();
+    await cmd.handler(ctx);
+    const all = ctx.replies.join(" ");
+    // Text should be truncated (100 char by appendChat + 80 char display truncation)
+    expect(all).toContain("...");
+    expect(all).not.toContain("a".repeat(200));
+  });
+
+  it("shows only last 4 chat entries per session", async () => {
+    const sessions = new SessionManager(3_600_000);
+    sessions.getOrCreate("proj:user1", "user1", "claude");
+    // Add 6 entries, only last 4 should be displayed
+    for (let i = 1; i <= 3; i++) {
+      sessions.appendChat("proj:user1", { role: "user", text: `msg${i}`, ts: Date.now() - (6 - 2 * i) * 1000 });
+      sessions.appendChat("proj:user1", { role: "assistant", text: `reply${i}`, ts: Date.now() - (5 - 2 * i) * 1000 });
+    }
+
+    const engine = mockEngine({ sessions });
+    const cmd = createListCommand(engine);
+    const ctx = mockCtx();
+    await cmd.handler(ctx);
+    const all = ctx.replies.join(" ");
+    // msg1 should not appear (it's entry 1 of 6, only last 4 shown)
+    expect(all).not.toContain("msg1");
+    expect(all).not.toContain("reply1");
+    // msg2, reply2, msg3, reply3 should appear (last 4)
+    expect(all).toContain("msg2");
+    expect(all).toContain("reply2");
+    expect(all).toContain("msg3");
+    expect(all).toContain("reply3");
   });
 });

@@ -1,6 +1,12 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { log } from "../logger.js";
 
+export interface ChatEntry {
+  role: "user" | "assistant";
+  text: string;
+  ts: number;
+}
+
 export interface SessionMeta {
   key: string;
   userID: string;
@@ -9,6 +15,7 @@ export interface SessionMeta {
   cliSessionId?: string;
   lastChatID?: string;
   lastActiveAt: number;
+  chatHistory?: ChatEntry[];
 }
 
 export class SessionManager {
@@ -18,6 +25,8 @@ export class SessionManager {
   private persistPath: string | null = null;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly SAVE_DEBOUNCE_MS = 5_000;
+  private readonly MAX_CHAT_HISTORY = 10;
+  private readonly MAX_CHAT_TEXT_LEN = 100;
   onSessionRemoved?: (key: string) => void;
 
   constructor(ttlMs: number, persistPath?: string) {
@@ -76,6 +85,23 @@ export class SessionManager {
 
   findLastChatID(key: string): string | undefined {
     return this.sessions.get(key)?.lastChatID;
+  }
+
+  appendChat(key: string, entry: ChatEntry): void {
+    const meta = this.sessions.get(key);
+    if (!meta) return;
+    if (!meta.chatHistory) meta.chatHistory = [];
+    const truncated: ChatEntry = {
+      ...entry,
+      text: entry.text.length > this.MAX_CHAT_TEXT_LEN
+        ? entry.text.slice(0, this.MAX_CHAT_TEXT_LEN) + "..."
+        : entry.text,
+    };
+    meta.chatHistory.push(truncated);
+    if (meta.chatHistory.length > this.MAX_CHAT_HISTORY) {
+      meta.chatHistory = meta.chatHistory.slice(-this.MAX_CHAT_HISTORY);
+    }
+    this.scheduleSave();
   }
 
   private cleanup(): void {

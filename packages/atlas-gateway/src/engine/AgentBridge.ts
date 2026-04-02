@@ -6,7 +6,7 @@ import type {
   AgentFactoryOptions,
 } from 'atlas-agent';
 import type { CardEngineImpl } from './CardEngine.js';
-import type { SessionInfo } from './SessionManager.js';
+import type { SessionInfo, SessionManagerImpl } from './SessionManager.js';
 import type { ChannelEvent } from '../channel/channelEvent.js';
 import { SessionQueue, sessionKey } from './SessionQueue.js';
 
@@ -23,6 +23,7 @@ export interface AgentBridgeDeps {
   cardEngine: CardEngineImpl;
   queue: SessionQueue;
   agentOpts: AgentFactoryOptions;
+  sessionManager?: SessionManagerImpl;
 }
 
 // ── Implementation ─────────────────────────────────────────────────────────
@@ -32,6 +33,7 @@ export class AgentBridge {
   private readonly cardEngine: CardEngineImpl;
   private readonly queue: SessionQueue;
   private readonly agentOpts: AgentFactoryOptions;
+  private readonly sessionManager?: SessionManagerImpl;
 
   /** Gateway sessionId -> ManagedAgentSession */
   private sessions = new Map<string, ManagedAgentSession>();
@@ -41,6 +43,7 @@ export class AgentBridge {
     this.cardEngine = deps.cardEngine;
     this.queue = deps.queue;
     this.agentOpts = deps.agentOpts;
+    this.sessionManager = deps.sessionManager;
   }
 
   /**
@@ -65,6 +68,15 @@ export class AgentBridge {
           const handler: AgentMessageHandler = (msg: AgentMessage) => {
             console.log(`[AgentBridge] msg type=${msg.type} session=${session.sessionId}`, msg.type === 'model-output' ? `delta=${!!(msg as any).textDelta} full=${!!(msg as any).fullText}` : msg.type === 'status' ? `status=${(msg as any).status}` : '');
             this.cardEngine.handleMessage(session.sessionId, session.chatId, msg);
+
+            // Record assistant response in chat history when fullText is available
+            if (msg.type === 'model-output' && (msg as any).fullText && this.sessionManager) {
+              this.sessionManager.appendChat(session.chatId, session.threadKey, {
+                role: 'assistant',
+                text: (msg as any).fullText,
+                ts: Date.now(),
+              });
+            }
           };
           agent.onMessage(handler);
 

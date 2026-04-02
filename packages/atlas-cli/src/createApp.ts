@@ -153,6 +153,7 @@ export function createApp(config: AppConfig | AtlasConfig): App {
     cardEngine,
     queue,
     agentOpts: { cwd: normalized.agentCwd, env: normalized.agentEnv },
+    sessionManager,
   });
 
   // 8. Permission service

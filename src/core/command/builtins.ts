@@ -360,27 +360,88 @@ export function createStopCommand(engine: Engine): CommandDef {
   };
 }
 
-// ─── /list (alias for /sessions) ─────────────────────────────────────────────
+// ─── /list (enhanced with chat history) ──────────────────────────────────────
 
-export function createListCommand(store: ParkedSessionStore): CommandDef {
+function truncate(text: string, max: number): string {
+  // Strip newlines for compact display
+  const oneLine = text.replace(/\n/g, " ").trim();
+  return oneLine.length > max ? oneLine.slice(0, max) + "..." : oneLine;
+}
+
+export function createListCommand(engine: Engine): CommandDef {
   return {
     name: "list",
-    description: "List CLI sessions (alias for /sessions)",
+    description: "List all sessions with recent chat history",
     aliases: ["ls"],
     handler: async (ctx: CommandContext) => {
-      const sessions = store.list();
-      if (sessions.length === 0) {
+      const parkedSessions = engine.parkedSessions.list();
+      const activeSessions = engine.sessionMgr.list();
+
+      // Build a merged list: active sessions + parked sessions (deduped by name)
+      const entries: Array<{
+        name: string;
+        status: "running" | "parked" | "active";
+        model?: string;
+        ago: string;
+        chatLines: string[];
+      }> = [];
+
+      // Active sessions from SessionManager
+      for (const meta of activeSessions) {
+        const ago = timeAgo(Date.now() - meta.lastActiveAt);
+        const chatLines: string[] = [];
+        if (meta.chatHistory && meta.chatHistory.length > 0) {
+          // Show last 4 entries (2 pairs)
+          const recent = meta.chatHistory.slice(-4);
+          for (const entry of recent) {
+            const icon = entry.role === "user" ? "👤" : "🤖";
+            chatLines.push(`   > ${icon} ${truncate(entry.text, 80)}`);
+          }
+        }
+        entries.push({
+          name: meta.key,
+          status: "active",
+          model: meta.model,
+          ago,
+          chatLines,
+        });
+      }
+
+      // Parked sessions (skip if already shown as active — dedup by cliSessionId)
+      const activeCliIds = new Set(
+        activeSessions.map((m) => m.cliSessionId).filter(Boolean),
+      );
+      for (const s of parkedSessions) {
+        if (activeCliIds.has(s.cliSessionId)) continue;
+        const refTime = s.status === "running" ? s.startedAt : s.parkedAt;
+        const ago = timeAgo(Date.now() - refTime);
+        entries.push({
+          name: s.name,
+          status: s.status === "running" ? "running" : "parked",
+          ago,
+          chatLines: [],
+        });
+      }
+
+      if (entries.length === 0) {
         await ctx.reply("No sessions. Use `beam start <name>` from your terminal to start a session.");
         return;
       }
-      const lines = sessions.map((s, i) => {
-        const icon = s.status === "running" ? "🟢" : "🅿️";
-        const label = s.status === "running" ? "Running" : "Parked";
-        const refTime = s.status === "running" ? s.startedAt : s.parkedAt;
-        const ago = timeAgo(Date.now() - refTime);
-        return `${i + 1}. ${icon} **${s.name}** — ${label} (${ago})`;
+
+      const lines = entries.map((e, i) => {
+        const icon = e.status === "active" ? "🟢" : e.status === "running" ? "🟢" : "🅿️";
+        const label = e.status === "active" ? "Active" : e.status === "running" ? "Running" : "Parked";
+        let line = `${i + 1}. ${icon} **${e.name}** — ${label} (${e.ago})`;
+        if (e.model) {
+          line += `\n   Model: ${e.model}`;
+        }
+        if (e.chatLines.length > 0) {
+          line += "\n" + e.chatLines.join("\n");
+        }
+        return line;
       });
-      await ctx.reply(`**Sessions**\n\n${lines.join("\n")}\n\nTo resume a parked session: \`/resume <name>\``);
+
+      await ctx.reply(`**All Sessions**\n\n${lines.join("\n\n")}\n\nTo resume a parked session: \`/resume <name>\``);
     },
   };
 }

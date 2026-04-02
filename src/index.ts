@@ -106,6 +106,14 @@ async function main(): Promise<void> {
   const config = loadConfig();
   log("info", "Configuration loaded");
 
+  // Propagate config-level API settings to process.env (config.json < .env < shell env)
+  if (config.agent.anthropic_base_url && !process.env.ANTHROPIC_BASE_URL) {
+    process.env.ANTHROPIC_BASE_URL = config.agent.anthropic_base_url;
+  }
+  if (config.agent.anthropic_api_key && !process.env.ANTHROPIC_API_KEY) {
+    process.env.ANTHROPIC_API_KEY = config.agent.anthropic_api_key;
+  }
+
   // Initialize workspace
   const agentID = "default";
   const workspaceRoot = config.agent.workspace_root || getDefaultWorkspaceRoot();
@@ -160,7 +168,7 @@ async function main(): Promise<void> {
   engine.commands.register(createHelpCommand(engine));
   engine.commands.register(createStatusCommand(engine));
   engine.commands.register(createStopCommand(engine));
-  engine.commands.register(createListCommand(engine.parkedSessions));
+  engine.commands.register(createListCommand(engine));
   engine.commands.register(createSwitchCommand(engine));
   engine.commands.register(createDeleteCommand(engine.parkedSessions));
   engine.commands.register(createHistoryCommand(engine));

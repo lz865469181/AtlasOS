@@ -92,7 +92,10 @@ export class EngineImpl implements Engine {
     // 1. Extract text from event
     const text = event.content.type === 'text' ? event.content.text : null;
 
-    // 2. If text starts with '/', try command resolution
+    // 2. Compute threadKey: if user replies in thread → use threadId, else use messageId
+    const threadKey = event.threadId ?? event.messageId;
+
+    // 3. If text starts with '/', try command resolution
     if (text && text.startsWith('/')) {
       const resolved = this.commandRegistry.resolve(text);
       if (resolved) {
@@ -104,6 +107,7 @@ export class EngineImpl implements Engine {
         const context: CommandContext = {
           chatId: event.chatId,
           userId: event.userId,
+          threadKey,
           sessionManager: this.sessionManager,
           bridge: this.bridge ?? noopBridge,
           sender,
@@ -123,18 +127,24 @@ export class EngineImpl implements Engine {
       }
     }
 
-    // 3. Get or create session
-    const session = await this.sessionManager.getOrCreate(event.chatId, undefined, event.channelId);
+    // 4. Get or create session with threadKey
+    const session = await this.sessionManager.getOrCreate(event.chatId, threadKey, undefined, event.channelId);
 
-    // 4. Store the latest prompt text for idle notifications
+    // 5. Store the latest prompt text for idle notifications
     if (text) {
       session.lastPrompt = text;
+      // Record user message in chat history
+      this.sessionManager.appendChat(event.chatId, threadKey, {
+        role: 'user',
+        text,
+        ts: Date.now(),
+      });
     }
 
-    // 5. Touch idle watcher to reset the timer
+    // 6. Touch idle watcher to reset the timer
     this.idleWatcher?.touch(session.sessionId, session.chatId);
 
-    // 6. Invoke the onPrompt callback to let callers wire the agent
+    // 7. Invoke the onPrompt callback to let callers wire the agent
     if (this.onPrompt) {
       try {
         await this.onPrompt(session, event);

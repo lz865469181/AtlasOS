@@ -9,7 +9,7 @@ export const AgentCommand: Command = {
     if (!agentId) {
       // List active sessions' agents as a proxy for available agents
       const sessions = context.sessionManager.listActive();
-      const current = context.sessionManager.get(context.chatId);
+      const current = context.sessionManager.get(context.chatId, context.threadKey);
       const currentAgent = current?.agentId ?? '(none)';
       const lines = [`Current agent: ${currentAgent}`];
 
@@ -23,12 +23,12 @@ export const AgentCommand: Command = {
     }
 
     // Destroy old bridge session if exists
-    const oldSession = context.sessionManager.get(context.chatId);
+    const oldSession = context.sessionManager.get(context.chatId, context.threadKey);
     if (oldSession) {
       await context.bridge.destroySession(oldSession.sessionId);
     }
 
-    await context.sessionManager.switchAgent(context.chatId, agentId);
+    await context.sessionManager.switchAgent(context.chatId, context.threadKey, agentId);
     return `Switched to agent: ${agentId}`;
   },
 };

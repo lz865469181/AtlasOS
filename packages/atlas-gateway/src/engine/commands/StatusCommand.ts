@@ -4,7 +4,7 @@ export const StatusCommand: Command = {
   name: 'status',
   description: 'Show the current session status.',
   async execute(_args: string, context: CommandContext): Promise<string> {
-    const session = context.sessionManager.get(context.chatId);
+    const session = context.sessionManager.get(context.chatId, context.threadKey);
     if (!session) {
       return 'No active session.';
     }

@@ -329,6 +329,9 @@ export class Engine {
     state.replyCtx = replyCtx;
     state.lastActivity = Date.now();
 
+    // Record user message in chat history
+    this.sessions.appendChat(sessionKey, { role: "user", text: event.text, ts: Date.now() });
+
     // Send message to agent
     await state.agentSession.send(event.text);
 
@@ -389,6 +392,10 @@ export class Engine {
             state.inputTokens = ev.usage.inputTokens;
           }
           let finalContent = preview.finish() || ev.content;
+          // Record assistant response in chat history
+          if (finalContent) {
+            this.sessions.appendChat(sessionKey, { role: "assistant", text: finalContent, ts: Date.now() });
+          }
           if (finalContent && !state.quiet) {
             if (state.inputTokens && state.inputTokens > 0) {
               const ctxSize = activeAgent.contextWindowSize ?? 200_000;
