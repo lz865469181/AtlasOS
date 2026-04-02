@@ -6,7 +6,7 @@ import type { MessageCorrelationStoreImpl } from './MessageCorrelationStore.js';
 import type { CardRenderPipeline } from './CardRenderPipeline.js';
 import type { CardEngineImpl } from './CardEngine.js';
 import type { SessionManagerImpl, SessionInfo } from './SessionManager.js';
-import type { CommandRegistryImpl, CommandContext, BridgeLike } from './CommandRegistry.js';
+import type { CommandRegistryImpl, CommandContext, BridgeLike, ThreadContextStoreLike } from './CommandRegistry.js';
 import type { PermissionService } from './PermissionService.js';
 import type { IdleWatcher } from './IdleWatcher.js';
 
@@ -35,6 +35,7 @@ export interface EngineDeps {
   senderFactory: SenderFactory;
   bridge?: BridgeLike;
   idleWatcher?: IdleWatcher;
+  threadContextStore?: ThreadContextStoreLike;
   onPrompt?: OnPromptCallback;
 }
 
@@ -58,6 +59,7 @@ export class EngineImpl implements Engine {
   private readonly senderFactory: SenderFactory;
   private readonly bridge?: BridgeLike;
   private readonly idleWatcher?: IdleWatcher;
+  private readonly threadContextStore?: ThreadContextStoreLike;
   private readonly onPrompt?: OnPromptCallback;
 
   constructor(deps: EngineDeps) {
@@ -71,6 +73,7 @@ export class EngineImpl implements Engine {
     this.senderFactory = deps.senderFactory;
     this.bridge = deps.bridge;
     this.idleWatcher = deps.idleWatcher;
+    this.threadContextStore = deps.threadContextStore;
     this.onPrompt = deps.onPrompt;
   }
 
@@ -92,10 +95,12 @@ export class EngineImpl implements Engine {
     // 1. Extract text from event
     const text = event.content.type === 'text' ? event.content.text : null;
 
-    // 2. Compute threadKey: if user replies in thread → use threadId, else use messageId
-    const threadKey = event.threadId ?? event.messageId;
+    // 2. Compute threadKey: if user replies in thread → use threadId, else use chatId
+    //    (messageId is unique per message — useless as a stable key)
+    const threadKey = event.threadId ?? event.chatId;
 
     // 3. If text starts with '/', try command resolution
+    console.log('[Engine] handleChannelEvent text=%j threadId=%s messageId=%s threadKey=%s', text, event.threadId, event.messageId, threadKey);
     if (text && text.startsWith('/')) {
       const resolved = this.commandRegistry.resolve(text);
       if (resolved) {
@@ -111,6 +116,7 @@ export class EngineImpl implements Engine {
           sessionManager: this.sessionManager,
           bridge: this.bridge ?? noopBridge,
           sender,
+          threadContextStore: this.threadContextStore,
         };
 
         const result = await resolved.command.execute(resolved.args, context);
@@ -127,36 +133,64 @@ export class EngineImpl implements Engine {
       }
     }
 
-    // 4. Get or create session with threadKey
-    const session = await this.sessionManager.getOrCreate(event.chatId, threadKey, undefined, event.channelId);
-
-    // 5. Store the latest prompt text for idle notifications
-    if (text) {
-      session.lastPrompt = text;
-      // Record user message in chat history
-      this.sessionManager.appendChat(event.chatId, threadKey, {
-        role: 'user',
-        text,
-        ts: Date.now(),
-      });
+    // 4. Check ThreadContext for active session override
+    if (this.threadContextStore && threadKey) {
+      const threadCtx = this.threadContextStore.get(event.chatId, threadKey);
+      if (threadCtx?.activeSessionId) {
+        const allSessions = this.sessionManager.listActive();
+        const activeSession = allSessions.find(s => s.sessionId === threadCtx.activeSessionId);
+        if (activeSession) {
+          // Route directly to this session (skip getOrCreate)
+          activeSession.lastPrompt = text ?? undefined;
+          this.idleWatcher?.touch(activeSession.sessionId, activeSession.chatId);
+          if (this.onPrompt) await this.onPrompt(activeSession, event);
+          return;
+        }
+        // Active session gone — clear pointer, fall through to default
+        this.threadContextStore.setActive(event.chatId, threadKey, null);
+      }
     }
 
-    // 6. Touch idle watcher to reset the timer
-    this.idleWatcher?.touch(session.sessionId, session.chatId);
-
-    // 7. Invoke the onPrompt callback to let callers wire the agent
-    if (this.onPrompt) {
-      try {
-        await this.onPrompt(session, event);
-      } catch (err) {
-        const detail = err instanceof Error ? err.message : String(err);
+    // 5. Find existing session for this thread (do NOT auto-create)
+    const existingSession = this.sessionManager.get(event.chatId, threadKey);
+    if (existingSession) {
+      // Route to existing session
+      if (text) {
+        existingSession.lastPrompt = text;
+        this.sessionManager.appendChat(event.chatId, threadKey, {
+          role: 'user',
+          text,
+          ts: Date.now(),
+        });
+      }
+      this.idleWatcher?.touch(existingSession.sessionId, existingSession.chatId);
+      if (this.onPrompt) {
         try {
-          const sender = this.senderFactory(event.chatId, event.channelId);
-          await sender.sendText(`❌ Agent error: ${detail}`);
-        } catch {
-          // If we can't even send the error, just log it
+          await this.onPrompt(existingSession, event);
+        } catch (err) {
+          const detail = err instanceof Error ? err.message : String(err);
+          try {
+            const sender = this.senderFactory(event.chatId, event.channelId);
+            await sender.sendText(`Error: ${detail}`);
+          } catch { /* ignore send failure */ }
         }
       }
+      return;
+    }
+
+    // 6. No existing session — tell user to attach one
+    const sender = this.senderFactory(event.chatId, event.channelId);
+    const allSessions = this.sessionManager.listActive();
+    if (allSessions.length > 0) {
+      await sender.sendText(
+        `No active session in this thread. Use /attach <number> to connect a session.\nUse /list to see available sessions.`,
+        event.messageId,
+      );
+    } else {
+      await sender.sendText(
+        `No sessions available. Start a beam session first with \`beam start <name>\`, then use /attach to connect.`,
+        event.messageId,
+      );
     }
   }
 

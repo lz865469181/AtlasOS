@@ -256,65 +256,99 @@ describe('Engine', () => {
       expect(onPrompt).not.toHaveBeenCalled();
     });
 
-    it('falls through to session when slash command does not resolve', async () => {
-      const onPrompt = vi.fn();
-      deps = createDeps({ onPrompt });
+    it('falls through to "no session" message when slash command does not resolve', async () => {
+      const { factory, lastSender } = mockSenderFactory();
+      deps = createDeps({ senderFactory: factory });
       engine = new EngineImpl(deps);
 
       const event = textEvent('/unknown-cmd');
       await engine.handleChannelEvent(event);
 
       expect(deps.commandRegistry.resolve).toHaveBeenCalledWith('/unknown-cmd');
-      expect(deps.sessionManager.getOrCreate).toHaveBeenCalledWith('chat-1', 'msg-evt-1', undefined, 'ch-1');
-      expect(onPrompt).toHaveBeenCalled();
+      expect(deps.sessionManager.getOrCreate).not.toHaveBeenCalled();
+      expect(lastSender().sendText).toHaveBeenCalledWith(
+        expect.stringContaining('No sessions available'),
+        'msg-evt-1',
+      );
     });
 
-    it('creates session and calls onPrompt for regular text', async () => {
-      const onPrompt = vi.fn();
-      deps = createDeps({ onPrompt });
+    it('sends "no active session" when no existing session for regular text', async () => {
+      const { factory, lastSender } = mockSenderFactory();
+      deps = createDeps({ senderFactory: factory });
       engine = new EngineImpl(deps);
 
       const event = textEvent('Hello, AI!');
       await engine.handleChannelEvent(event);
 
       expect(deps.commandRegistry.resolve).not.toHaveBeenCalled();
-      expect(deps.sessionManager.getOrCreate).toHaveBeenCalledWith('chat-1', 'msg-evt-1', undefined, 'ch-1');
-      expect(onPrompt).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionId: 'session-chat-1', chatId: 'chat-1' }),
-        event,
+      expect(deps.sessionManager.getOrCreate).not.toHaveBeenCalled();
+      expect(lastSender().sendText).toHaveBeenCalledWith(
+        expect.stringContaining('No sessions available'),
+        'msg-evt-1',
       );
     });
 
-    it('handles non-text events (image) by going to session flow', async () => {
+    it('routes to existing session and calls onPrompt', async () => {
       const onPrompt = vi.fn();
+      const session: SessionInfo = {
+        sessionId: 'session-chat-1',
+        chatId: 'chat-1',
+        channelId: 'feishu',
+        agentId: 'claude',
+        permissionMode: 'normal',
+        createdAt: Date.now(),
+        lastActiveAt: Date.now(),
+      };
+
       deps = createDeps({ onPrompt });
+      (deps.sessionManager.get as ReturnType<typeof vi.fn>).mockReturnValue(session);
       engine = new EngineImpl(deps);
 
-      const event = imageEvent();
+      const event = textEvent('Hello, AI!');
       await engine.handleChannelEvent(event);
 
-      expect(deps.commandRegistry.resolve).not.toHaveBeenCalled();
-      expect(deps.sessionManager.getOrCreate).toHaveBeenCalledWith('chat-1', 'msg-evt-img', undefined, 'ch-1');
-      expect(onPrompt).toHaveBeenCalled();
+      expect(deps.sessionManager.get).toHaveBeenCalledWith('chat-1', 'msg-evt-1');
+      expect(onPrompt).toHaveBeenCalledWith(session, event);
     });
 
-    it('works without onPrompt callback', async () => {
+    it('sends "no active session" with hint when beam sessions exist', async () => {
+      const { factory, lastSender } = mockSenderFactory();
+      deps = createDeps({ senderFactory: factory });
+      (deps.sessionManager.listActive as ReturnType<typeof vi.fn>).mockReturnValue([
+        { sessionId: 'beam-1', chatId: 'other' },
+      ]);
+      engine = new EngineImpl(deps);
+
       const event = textEvent('Hello');
       await engine.handleChannelEvent(event);
 
-      expect(deps.sessionManager.getOrCreate).toHaveBeenCalledWith('chat-1', 'msg-evt-1', undefined, 'ch-1');
-      // Should not throw
+      expect(lastSender().sendText).toHaveBeenCalledWith(
+        expect.stringContaining('No active session'),
+        'msg-evt-1',
+      );
+      expect(lastSender().sendText).toHaveBeenCalledWith(
+        expect.stringContaining('/attach'),
+        'msg-evt-1',
+      );
     });
 
-    it('passes channelId from event to sessionManager.getOrCreate', async () => {
-      const onPrompt = vi.fn();
-      deps = createDeps({ onPrompt });
+    it('works without onPrompt callback when session exists', async () => {
+      const session: SessionInfo = {
+        sessionId: 'session-chat-1',
+        chatId: 'chat-1',
+        channelId: 'feishu',
+        agentId: 'claude',
+        permissionMode: 'normal',
+        createdAt: Date.now(),
+        lastActiveAt: Date.now(),
+      };
+      deps = createDeps({});
+      (deps.sessionManager.get as ReturnType<typeof vi.fn>).mockReturnValue(session);
       engine = new EngineImpl(deps);
 
-      const event = textEvent('Hello', { channelId: 'dingtalk', chatId: 'dt-chat-1' });
+      const event = textEvent('Hello');
       await engine.handleChannelEvent(event);
-
-      expect(deps.sessionManager.getOrCreate).toHaveBeenCalledWith('dt-chat-1', 'msg-evt-1', undefined, 'dingtalk');
+      // Should not throw
     });
 
     it('provides correct CommandContext with sender from senderFactory', async () => {
@@ -401,16 +435,27 @@ describe('Engine', () => {
   // -- Integration-like scenarios ------------------------------------------
 
   describe('full lifecycle', () => {
-    it('start -> handleChannelEvent -> stop', async () => {
+    it('start -> handleChannelEvent (with session) -> stop', async () => {
       const onPrompt = vi.fn();
+      const session: SessionInfo = {
+        sessionId: 'session-chat-1',
+        chatId: 'chat-1',
+        channelId: 'feishu',
+        agentId: 'claude',
+        permissionMode: 'normal',
+        createdAt: Date.now(),
+        lastActiveAt: Date.now(),
+      };
+
       deps = createDeps({ onPrompt });
+      (deps.sessionManager.get as ReturnType<typeof vi.fn>).mockReturnValue(session);
       engine = new EngineImpl(deps);
 
       await engine.start();
       expect(deps.sessionManager.restore).toHaveBeenCalledOnce();
 
       await engine.handleChannelEvent(textEvent('Hello'));
-      expect(deps.sessionManager.getOrCreate).toHaveBeenCalled();
+      expect(deps.sessionManager.get).toHaveBeenCalled();
       expect(onPrompt).toHaveBeenCalled();
 
       await engine.stop();
@@ -418,17 +463,16 @@ describe('Engine', () => {
       expect(deps.pipeline.dispose).toHaveBeenCalledOnce();
     });
 
-    it('handles multiple events in sequence', async () => {
-      const onPrompt = vi.fn();
-      deps = createDeps({ onPrompt });
+    it('sends no-session message for multiple events without existing sessions', async () => {
+      const { factory, lastSender } = mockSenderFactory();
+      deps = createDeps({ senderFactory: factory });
       engine = new EngineImpl(deps);
 
       await engine.handleChannelEvent(textEvent('First message', { chatId: 'chat-a' }));
       await engine.handleChannelEvent(textEvent('Second message', { chatId: 'chat-b' }));
 
-      expect(deps.sessionManager.getOrCreate).toHaveBeenCalledWith('chat-a', 'msg-evt-1', undefined, 'ch-1');
-      expect(deps.sessionManager.getOrCreate).toHaveBeenCalledWith('chat-b', 'msg-evt-1', undefined, 'ch-1');
-      expect(onPrompt).toHaveBeenCalledTimes(2);
+      expect(deps.sessionManager.getOrCreate).not.toHaveBeenCalled();
+      expect(factory).toHaveBeenCalledTimes(2);
     });
   });
 });

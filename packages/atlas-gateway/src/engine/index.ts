@@ -32,10 +32,13 @@ export { CardEngineImpl } from './CardEngine.js';
 export type { CardEngine, CardEngineDeps } from './CardEngine.js';
 
 export { SessionManagerImpl } from './SessionManager.js';
-export type { SessionManager, SessionInfo, SerializedSessionStore } from './SessionManager.js';
+export type { SessionManager, SessionInfo, SessionOwner } from './SessionManager.js';
 
 export { CommandRegistryImpl } from './CommandRegistry.js';
-export type { CommandRegistry, Command, CommandContext, SessionManagerLike, BridgeLike } from './CommandRegistry.js';
+export type { CommandRegistry, Command, CommandContext, SessionManagerLike, BridgeLike, ThreadContextStoreLike } from './CommandRegistry.js';
+
+export { ThreadContextStoreImpl } from './ThreadContext.js';
+export type { ThreadContext, ThreadContextStore } from './ThreadContext.js';
 
 export { EngineImpl } from './Engine.js';
 export type { Engine, EngineDeps, CardActionEvent, OnPromptCallback } from './Engine.js';
@@ -58,5 +61,8 @@ export {
   ModelCommand,
   ModeCommand,
   NewCommand,
-  TakeoverCommand,
+  AttachCommand,
+  SwitchCommand,
+  DetachCommand,
+  SessionsCommand,
 } from './commands/index.js';

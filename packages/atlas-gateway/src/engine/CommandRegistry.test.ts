@@ -202,10 +202,14 @@ describe('CommandRegistry', () => {
       expect(names).toContain('cancel');
       expect(names).toContain('status');
       expect(names).toContain('new');
-      expect(names).toContain('takeover');
       expect(names).toContain('help');
       expect(names).toContain('list');
-      expect(commands).toHaveLength(9);
+      expect(names).toContain('attach');
+      expect(names).toContain('switch');
+      expect(names).toContain('detach');
+      expect(names).toContain('sessions');
+      expect(names).toContain('destroy');
+      expect(commands).toHaveLength(13);
     });
 
     it('should include custom commands after registration', () => {
@@ -216,7 +220,7 @@ describe('CommandRegistry', () => {
       });
       const names = registry.listCommands().map((c) => c.name);
       expect(names).toContain('deploy');
-      expect(names).toHaveLength(10);
+      expect(names).toHaveLength(14);
     });
   });
 
@@ -381,28 +385,6 @@ describe('CommandRegistry', () => {
       expect(output).toBe('Session reset.');
     });
 
-    it('/takeover with valid sessionId', async () => {
-      const ctx = makeContext({ sessions: [{ sessionId: 'target-s', chatId: 'chat-x', agentId: 'claude' }] });
-      const result = registry.resolve('/takeover');
-      const output = await result!.command.execute('target-s', ctx);
-      expect(ctx.bridge.destroySession).toHaveBeenCalledWith('target-s');
-      expect(ctx.sessionManager.destroy).toHaveBeenCalledWith('chat-x', undefined);
-      expect(output).toContain('Session taken over');
-    });
-
-    it('/takeover with unknown sessionId', async () => {
-      const ctx = makeContext({ sessions: [] });
-      const result = registry.resolve('/takeover');
-      const output = await result!.command.execute('nonexistent', ctx);
-      expect(output).toContain('Session not found');
-    });
-
-    it('/takeover with no args', async () => {
-      const ctx = makeContext();
-      const result = registry.resolve('/takeover');
-      const output = await result!.command.execute('', ctx);
-      expect(output).toContain('Usage');
-    });
   });
 
   // ── prefix match with aliases dedup ─────────────────────────────────────

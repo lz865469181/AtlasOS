@@ -4,4 +4,7 @@ export { AgentCommand } from './AgentCommand.js';
 export { ModelCommand } from './ModelCommand.js';
 export { ModeCommand } from './ModeCommand.js';
 export { NewCommand } from './NewCommand.js';
-export { TakeoverCommand } from './TakeoverCommand.js';
+export { AttachCommand } from './AttachCommand.js';
+export { SwitchCommand } from './SwitchCommand.js';
+export { DetachCommand } from './DetachCommand.js';
+export { SessionsCommand } from './SessionsCommand.js';

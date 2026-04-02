@@ -1,21 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { SessionManagerImpl } from './SessionManager.js';
 
-// Mock fs/promises
-vi.mock('node:fs/promises', () => ({
-  mkdir: vi.fn().mockResolvedValue(undefined),
-  writeFile: vi.fn().mockResolvedValue(undefined),
-  readFile: vi.fn().mockRejectedValue(new Error('ENOENT')),
-}));
-
-import { mkdir, writeFile, readFile } from 'node:fs/promises';
-
 describe('SessionManager', () => {
   let manager: SessionManagerImpl;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    manager = new SessionManagerImpl('/tmp/test-sessions.json');
+    manager = new SessionManagerImpl();
   });
 
   // ── getOrCreate ─────────────────────────────────────────────────────
@@ -141,57 +132,17 @@ describe('SessionManager', () => {
     });
   });
 
-  // ── persist ─────────────────────────────────────────────────────────
+  // ── persist / restore (no-ops) ──────────────────────────────────────
 
   describe('persist', () => {
-    it('creates directory and writes JSON', async () => {
+    it('is a no-op', async () => {
       await manager.getOrCreate('chat-1');
-      await manager.persist();
-
-      expect(mkdir).toHaveBeenCalledWith(
-        expect.stringContaining(''),
-        { recursive: true },
-      );
-      expect(writeFile).toHaveBeenCalledWith(
-        '/tmp/test-sessions.json',
-        expect.any(String),
-        'utf-8',
-      );
-
-      const written = (writeFile as ReturnType<typeof vi.fn>).mock.calls[0]![1] as string;
-      const data = JSON.parse(written);
-      expect(data.sessions).toHaveLength(1);
-      expect(data.sessions[0].chatId).toBe('chat-1');
+      await manager.persist(); // should not throw
     });
   });
 
-  // ── restore ─────────────────────────────────────────────────────────
-
   describe('restore', () => {
-    it('restores sessions from file', async () => {
-      const data = {
-        sessions: [
-          {
-            sessionId: 'sid-1',
-            chatId: 'chat-1',
-            channelId: 'feishu',
-            agentId: 'claude',
-            permissionMode: 'normal',
-            createdAt: 1000,
-            lastActiveAt: 2000,
-          },
-        ],
-      };
-      (readFile as ReturnType<typeof vi.fn>).mockResolvedValueOnce(JSON.stringify(data));
-
-      await manager.restore();
-      const session = manager.get('chat-1');
-      expect(session).toBeDefined();
-      expect(session!.sessionId).toBe('sid-1');
-    });
-
-    it('does nothing when file does not exist', async () => {
-      (readFile as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('ENOENT'));
+    it('is a no-op', async () => {
       await manager.restore(); // should not throw
       expect(manager.listActive()).toHaveLength(0);
     });

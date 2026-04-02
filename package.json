@@ -5,7 +5,8 @@
     "build": "yarn workspace atlas-wire build && yarn workspace atlas-agent build && yarn workspace atlas-app-logs build && yarn workspace atlas-gateway build && yarn workspace atlas-cli build",
     "test": "yarn workspaces run test",
     "dev": "yarn workspace atlas-gateway dev",
-    "start": "yarn workspace atlas-cli start"
+    "start": "yarn workspace atlas-cli start",
+    "beam": "node packages/atlas-cli/dist/beam.js"
   },
   "workspaces": [
     "packages/*"

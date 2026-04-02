@@ -44,7 +44,8 @@ export const ListCommand: Command = {
         const threadInfo = session.threadKey ? `thread:${session.threadKey.slice(0, 8)}` : 'main';
         const active = timeAgo(session.lastActiveAt);
 
-        lines.push(`${i + 1}. 🟢 **${session.agentId}** [${threadInfo}] — ${active}`);
+        const shortId = session.sessionId.slice(0, 8);
+        lines.push(`${i + 1}. 🟢 **${session.agentId}** [${threadInfo}] \`${shortId}\` — ${active}`);
 
         // Show last 4 chat entries (2 pairs)
         const history = session.chatHistory;
@@ -74,7 +75,8 @@ export const ListCommand: Command = {
         const session = beamSessions[i];
         const label = session.displayName ?? session.chatId.replace(/^beam:/, '');
         const active = timeAgo(session.lastActiveAt);
-        lines.push(`${i + 1}. 🔵 **${label}** [${session.agentId}] — ${active}`);
+        const shortId = session.sessionId.slice(0, 8);
+        lines.push(`${i + 1}. 🔵 **${label}** [${session.agentId}] \`${shortId}\` — ${active}`);
       }
     }
 

@@ -11,6 +11,18 @@ export interface SessionManagerLike {
   destroy(chatId: string, threadKey?: string): Promise<void>;
   listActive(): Array<{ sessionId: string; chatId: string; agentId: string; threadKey?: string; channelId: string; displayName?: string; createdAt: number; lastActiveAt: number }>;
   listByChatId?(chatId: string): Array<{ sessionId: string; chatId: string; agentId: string; threadKey?: string; createdAt: number; lastActiveAt: number; lastPrompt?: string; chatHistory?: Array<{ role: 'user' | 'assistant'; text: string; ts: number }> }>;
+  setOwner?(sessionId: string, owner: { type: 'thread' | 'local'; id: string } | undefined): void;
+  removeBySessionId?(sessionId: string): boolean;
+  findByPrefix?(prefix: string): { sessionId: string; chatId: string; agentId: string; channelId: string; displayName?: string; createdAt: number; lastActiveAt: number } | null;
+}
+
+export interface ThreadContextStoreLike {
+  get(chatId: string, threadKey: string): { activeSessionId: string | null; attachedSessions: string[]; defaultSessionId: string | null } | undefined;
+  getOrCreate(chatId: string, threadKey: string): { activeSessionId: string | null; attachedSessions: string[]; defaultSessionId: string | null };
+  setActive(chatId: string, threadKey: string, sessionId: string | null): void;
+  attach(chatId: string, threadKey: string, sessionId: string): void;
+  detach(chatId: string, threadKey: string, sessionId: string): void;
+  setDefault(chatId: string, threadKey: string, sessionId: string): void;
 }
 
 export interface BridgeLike {
@@ -25,6 +37,7 @@ export interface CommandContext {
   sessionManager: SessionManagerLike;
   bridge: BridgeLike;
   sender: ChannelSender;
+  threadContextStore?: ThreadContextStoreLike;
 }
 
 export interface Command {
@@ -46,8 +59,12 @@ import { AgentCommand } from './commands/AgentCommand.js';
 import { ModelCommand } from './commands/ModelCommand.js';
 import { ModeCommand } from './commands/ModeCommand.js';
 import { NewCommand } from './commands/NewCommand.js';
-import { TakeoverCommand } from './commands/TakeoverCommand.js';
 import { ListCommand } from './commands/ListCommand.js';
+import { AttachCommand } from './commands/AttachCommand.js';
+import { SwitchCommand } from './commands/SwitchCommand.js';
+import { DetachCommand } from './commands/DetachCommand.js';
+import { SessionsCommand } from './commands/SessionsCommand.js';
+import { DestroyCommand } from './commands/DestroyCommand.js';
 
 // ── Built-in commands ───────────────────────────────────────────────────────
 
@@ -56,7 +73,7 @@ const helpCommand: Command = {
   aliases: ['h', '?'],
   description: 'Show available commands.',
   execute: async () =>
-    'Available commands: /agent, /model, /mode, /cancel, /status, /new, /takeover, /list, /help',
+    'Available commands: /agent, /model, /mode, /cancel, /status, /new, /destroy, /list, /attach, /switch, /detach, /sessions, /help',
 };
 
 const builtinCommands: Command[] = [
@@ -66,8 +83,12 @@ const builtinCommands: Command[] = [
   CancelCommand,
   StatusCommand,
   NewCommand,
-  TakeoverCommand,
   ListCommand,
+  AttachCommand,
+  SwitchCommand,
+  DetachCommand,
+  SessionsCommand,
+  DestroyCommand,
   helpCommand,
 ];
 

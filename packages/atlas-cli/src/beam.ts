@@ -37,12 +37,10 @@ function timeAgo(ts: number): string {
 // ── Commands ──────────────────────────────────────────────────────────────────
 
 async function cmdStart(name: string): Promise<void> {
-  if (!name) {
-    console.error('Usage: beam start <session-name>');
-    process.exit(1);
-  }
-
   const sessionId = randomUUID();
+  if (!name) {
+    name = sessionId.slice(0, 8);
+  }
   console.log(`\nStarting beam session '${name}' (id: ${sessionId})`);
 
   // Register on server
@@ -57,9 +55,9 @@ async function cmdStart(name: string): Promise<void> {
 
   const cliPath = (process.env.CLAUDE_CLI_PATH ?? 'claude').replace(/^"|"$/g, '');
 
-  // Cleanup handler: remove session from server on exit
+  // Cleanup handler: remove this specific session by sessionId
   const cleanup = () => {
-    fetch(`${SERVER_URL}/api/beam/sessions/${encodeURIComponent(name)}`, { method: 'DELETE' }).catch(() => {});
+    fetch(`${SERVER_URL}/api/beam/by-id/${encodeURIComponent(sessionId)}`, { method: 'DELETE' }).catch(() => {});
   };
   process.on('SIGINT', () => { cleanup(); process.exit(0); });
   process.on('SIGTERM', () => { cleanup(); process.exit(0); });
@@ -121,7 +119,7 @@ function printHelp(): void {
   console.log(`beam - Local Claude sessions visible in Feishu /list
 
 Usage:
-  beam start <name>     Start a Claude CLI session tracked by the server
+  beam start [name]     Start a Claude CLI session tracked by the server (defaults to short session ID)
   beam list             List active beam sessions
   beam drop <name>      Remove a beam session
 

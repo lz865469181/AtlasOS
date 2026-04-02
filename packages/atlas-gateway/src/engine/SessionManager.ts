@@ -1,7 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import type { AgentId } from 'atlas-agent';
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -10,6 +7,11 @@ export interface ChatEntry {
   role: 'user' | 'assistant';
   text: string;
   ts: number;
+}
+
+export interface SessionOwner {
+  type: 'thread' | 'local';
+  id: string;
 }
 
 export interface SessionInfo {
@@ -25,6 +27,7 @@ export interface SessionInfo {
   lastPrompt?: string;
   chatHistory?: ChatEntry[];
   displayName?: string;
+  owner?: SessionOwner;
 }
 
 export interface SessionManager {
@@ -41,10 +44,8 @@ export interface SessionManager {
   restore(): Promise<void>;
   registerExternal(opts: { sessionId: string; chatId: string; channelId: string; agentId: AgentId; displayName?: string }): SessionInfo;
   removeBySessionId(sessionId: string): boolean;
-}
-
-export interface SerializedSessionStore {
-  sessions: SessionInfo[];
+  setOwner(sessionId: string, owner: SessionOwner | undefined): void;
+  findByPrefix(prefix: string): SessionInfo | null;
 }
 
 // ── Defaults ───────────────────────────────────────────────────────────────
@@ -57,10 +58,8 @@ const DEFAULT_CHANNEL_ID = 'feishu';
 
 export class SessionManagerImpl implements SessionManager {
   private sessions = new Map<string, SessionInfo>();
-  private filePath: string;
 
-  constructor(filePath?: string) {
-    this.filePath = filePath ?? join(homedir(), '.atlasOS', 'sessions', 'sessions.json');
+  constructor() {
   }
 
   private sessionLookupKey(chatId: string, threadKey?: string): string {
@@ -155,7 +154,8 @@ export class SessionManagerImpl implements SessionManager {
   }
 
   registerExternal(opts: { sessionId: string; chatId: string; channelId: string; agentId: AgentId; displayName?: string }): SessionInfo {
-    const key = this.sessionLookupKey(opts.chatId);
+    // Use sessionId as key so multiple external sessions with same name coexist
+    const key = `ext:${opts.sessionId}`;
     const session: SessionInfo = {
       sessionId: opts.sessionId,
       chatId: opts.chatId,
@@ -180,33 +180,40 @@ export class SessionManagerImpl implements SessionManager {
     return false;
   }
 
+  setOwner(sessionId: string, owner: SessionOwner | undefined): void {
+    for (const session of this.sessions.values()) {
+      if (session.sessionId === sessionId) {
+        session.owner = owner;
+        return;
+      }
+    }
+  }
+
+  findByPrefix(prefix: string): SessionInfo | null {
+    const lower = prefix.toLowerCase();
+    const active = this.listActive();
+
+    // 1. Exact displayName match (highest priority)
+    const exactName = active.find(s => s.displayName?.toLowerCase() === lower);
+    if (exactName) return exactName;
+
+    // 2. displayName prefix match
+    const nameMatches = active.filter(s => s.displayName?.toLowerCase().startsWith(lower));
+    if (nameMatches.length === 1) return nameMatches[0];
+
+    // 3. sessionId prefix match
+    const idMatches = active.filter(s => s.sessionId.toLowerCase().startsWith(lower));
+    if (idMatches.length === 1) return idMatches[0];
+
+    // Ambiguous or no match
+    return null;
+  }
+
   async persist(): Promise<void> {
-    const dir = join(this.filePath, '..');
-    await mkdir(dir, { recursive: true });
-
-    const data: SerializedSessionStore = {
-      // Skip ephemeral beam sessions
-      sessions: Array.from(this.sessions.values()).filter(s => s.channelId !== 'beam'),
-    };
-
-    await writeFile(this.filePath, JSON.stringify(data, null, 2), 'utf-8');
+    // Sessions are ephemeral — no persistence needed
   }
 
   async restore(): Promise<void> {
-    let raw: string;
-    try {
-      raw = await readFile(this.filePath, 'utf-8');
-    } catch {
-      // File doesn't exist yet — nothing to restore
-      return;
-    }
-
-    const data: SerializedSessionStore = JSON.parse(raw);
-    this.sessions.clear();
-
-    for (const session of data.sessions) {
-      const key = this.sessionLookupKey(session.chatId, session.threadKey);
-      this.sessions.set(key, session);
-    }
+    // Sessions are ephemeral — no persistence needed
   }
 }

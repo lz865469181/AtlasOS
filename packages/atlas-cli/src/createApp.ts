@@ -23,6 +23,7 @@ import {
   CommandRegistryImpl,
   SessionQueue,
   IdleWatcher,
+  ThreadContextStoreImpl,
 } from 'atlas-gateway';
 import type {
   LarkClient,
@@ -166,8 +167,9 @@ export function createApp(config: AppConfig | AtlasConfig): App {
     bridge,
   });
 
-  // 9. Command registry
+  // 9. Command registry + thread context
   const commandRegistry = new CommandRegistryImpl();
+  const threadContextStore = new ThreadContextStoreImpl();
 
   // 10. Idle watcher
   const idleWatcher = new IdleWatcher({
@@ -204,7 +206,7 @@ export function createApp(config: AppConfig | AtlasConfig): App {
               { type: 'divider' },
               {
                 type: 'markdown',
-                content: `Reply \`/takeover ${sessionId}\` to take over.`,
+                content: `Reply \`/attach ${sessionId.slice(0, 8)}\` to attach this session to your thread.`,
               },
             ],
           });
@@ -231,6 +233,7 @@ export function createApp(config: AppConfig | AtlasConfig): App {
     senderFactory,
     bridge,
     idleWatcher,
+    threadContextStore,
     onPrompt: (session, event) => bridge.handlePrompt(session, event),
   });
 
@@ -368,13 +371,20 @@ export function createApp(config: AppConfig | AtlasConfig): App {
         const name = req.params.name;
         const chatId = `beam:${name}`;
         const all = sessionManager.listActive();
-        const session = all.find(s => s.channelId === 'beam' && s.chatId === chatId);
-        if (!session) {
+        const matching = all.filter(s => s.channelId === 'beam' && s.chatId === chatId);
+        if (matching.length === 0) {
           res.json({ ok: false, message: 'not found' });
           return;
         }
-        sessionManager.removeBySessionId(session.sessionId);
-        res.json({ ok: true });
+        for (const s of matching) {
+          sessionManager.removeBySessionId(s.sessionId);
+        }
+        res.json({ ok: true, removed: matching.length });
+      });
+
+      apiApp.delete('/api/beam/by-id/:sessionId', (req, res) => {
+        const removed = sessionManager.removeBySessionId(req.params.sessionId);
+        res.json({ ok: removed });
       });
 
       const apiPort = parseInt(process.env.BEAM_API_PORT ?? '20263', 10);

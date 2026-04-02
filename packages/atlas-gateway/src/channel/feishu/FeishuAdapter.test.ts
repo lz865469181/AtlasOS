@@ -503,6 +503,37 @@ describe('FeishuAdapter', () => {
     });
   });
 
+  it('preserves slash command in thread reply with mention', () => {
+      const data = makeMessageEvent({
+        messageId: 'msg_reply_1',
+        rootId: 'msg_root_1',
+        chatType: 'group',
+        content: JSON.stringify({ text: '@_user_1 /attach 1' }),
+        mentions: [
+          { key: '@_user_1', id: { open_id: 'ou_bot' }, name: 'Bot', tenant_key: 'tk' },
+        ],
+      });
+      const event = adapter.toChannelEvent(data);
+      expect(event).not.toBeNull();
+      expect(event!.content).toEqual({ type: 'text', text: '/attach 1' });
+      expect(event!.threadId).toBe('msg_root_1');
+    });
+
+    it('handles slash command with newline after mention in thread reply', () => {
+      const data = makeMessageEvent({
+        messageId: 'msg_reply_2',
+        rootId: 'msg_root_2',
+        chatType: 'group',
+        content: JSON.stringify({ text: '@_user_1\n/attach 1' }),
+        mentions: [
+          { key: '@_user_1', id: { open_id: 'ou_bot' }, name: 'Bot', tenant_key: 'tk' },
+        ],
+      });
+      const event = adapter.toChannelEvent(data);
+      expect(event).not.toBeNull();
+      expect(event!.content).toEqual({ type: 'text', text: '/attach 1' });
+    });
+
   describe('handleMessageEvent', () => {
     it('calls handler with parsed ChannelEvent', async () => {
       const handler = vi.fn().mockResolvedValue(undefined);

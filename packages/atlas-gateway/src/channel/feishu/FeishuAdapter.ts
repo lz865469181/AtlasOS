@@ -187,9 +187,12 @@ export function stripMentions(
   let result = text;
   for (const mention of mentions) {
     if (mention.key) {
-      result = result.replace(mention.key, '').trim();
+      result = result.replace(mention.key, '');
     }
   }
+  // Strip zero-width / invisible Unicode characters that Feishu may inject,
+  // then collapse whitespace and trim.
+  result = result.replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '');
   return result.trim();
 }
 
@@ -420,8 +423,13 @@ export class FeishuAdapter implements ChannelAdapter {
     }
 
     // Parse the event into a ChannelEvent
+    console.log('[FeishuAdapter] handleMessageEvent message_type=%s content=%s root_id=%s',
+      data.message?.message_type, data.message?.content, data.message?.root_id);
     const event = this.toChannelEvent(data);
-    if (!event) return;
+    if (!event) {
+      console.log('[FeishuAdapter] toChannelEvent returned null — message dropped');
+      return;
+    }
 
     // Mark as processed
     if (msgId) {
@@ -467,9 +475,11 @@ export class FeishuAdapter implements ChannelAdapter {
 
     // Strip mentions in group chats
     const mentions = message.mentions ?? [];
+    console.log('[FeishuAdapter] toChannelEvent raw text=%j mentions=%j root_id=%s message_id=%s', text, mentions.map(m => ({ key: m.key, name: m.name })), message.root_id, message.message_id);
     if (mentions.length > 0 && contentType === 'text') {
       text = stripMentions(text, mentions);
     }
+    console.log('[FeishuAdapter] after stripMentions text=%j startsWith(/)=%s', text, text.startsWith('/'));
 
     // Build content based on type
     let content: ChannelEvent['content'];
