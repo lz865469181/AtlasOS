@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  CodeLinkConfigSchema,
   AtlasConfigSchema,
   FeishuChannelConfigSchema,
   DingTalkChannelConfigSchema,
@@ -55,6 +56,10 @@ describe('AgentConfigSchema', () => {
 });
 
 describe('AtlasConfigSchema', () => {
+  it('keeps CodeLinkConfigSchema as the primary alias of AtlasConfigSchema', () => {
+    expect(CodeLinkConfigSchema).toBe(AtlasConfigSchema);
+  });
+
   it('applies all defaults for empty input', () => {
     const result = AtlasConfigSchema.parse({});
     expect(result.channels).toEqual({});

@@ -1,34 +1,30 @@
 import type { Command, CommandContext } from '../CommandRegistry.js';
+import { defaultRuntimeSpecForAgent } from '../../runtime/RuntimeSpecs.js';
 
 export const AgentCommand: Command = {
   name: 'agent',
-  description: 'Switch to a different agent or list available agents.',
+  description: 'Create a runtime from a different agent spec or list the current one.',
   async execute(args: string, context: CommandContext): Promise<string> {
     const agentId = args.trim();
 
     if (!agentId) {
-      // List active sessions' agents as a proxy for available agents
-      const sessions = context.sessionManager.listActive();
-      const current = context.sessionManager.get(context.chatId, context.threadKey);
-      const currentAgent = current?.agentId ?? '(none)';
-      const lines = [`Current agent: ${currentAgent}`];
-
-      if (sessions.length > 0) {
-        const agents = [...new Set(sessions.map((s) => s.agentId))];
-        lines.push(`Active agents: ${agents.join(', ')}`);
-      }
-
-      lines.push('Usage: /agent <agent-id> — switch agent');
-      return lines.join('\n');
+      const current = context.binding.activeRuntimeId
+        ? context.runtimeRegistry.get(context.binding.activeRuntimeId)
+        : undefined;
+      const currentAgent = current?.provider ?? '(none)';
+      return `Current agent: ${currentAgent}\nUsage: /agent <agent-id> - create a new runtime and switch to it`;
     }
 
-    // Destroy old bridge session if exists
-    const oldSession = context.sessionManager.get(context.chatId, context.threadKey);
-    if (oldSession) {
-      await context.bridge.destroySession(oldSession.sessionId);
-    }
+    const runtime = await context.runtimeRegistry.create(
+      defaultRuntimeSpecForAgent(agentId),
+      {
+        displayName: agentId,
+        metadata: { permissionMode: 'normal' },
+      },
+    );
 
-    await context.sessionManager.switchAgent(context.chatId, context.threadKey, agentId);
+    context.bindingStore.attach(context.binding.bindingId, runtime.id);
+    context.bindingStore.setActive(context.binding.bindingId, runtime.id);
     return `Switched to agent: ${agentId}`;
   },
 };

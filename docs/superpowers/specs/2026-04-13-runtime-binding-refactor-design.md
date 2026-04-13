@@ -10,7 +10,7 @@ Atlas AI is currently strong at channel-native interaction:
 
 - Feishu and DingTalk adapters are already integrated into a unified gateway.
 - Thread-aware routing, permission cards, streaming cards, and idle notifications already exist.
-- `beam` can expose external Claude sessions to the gateway and attach them to IM threads.
+- externally launched Claude runtimes can be registered with the gateway and attached to IM threads.
 
 However, the current runtime model is weak:
 
@@ -18,7 +18,7 @@ However, the current runtime model is weak:
 - The system mixes three different ideas under the same word "session":
   - chat/thread routing state
   - runtime/process state
-  - externally registered sessions such as `beam`
+  - externally registered runtimes
 - `SessionManager` currently stores both chat-facing metadata and external runtime listings.
 - `ThreadContextStore` is only an in-memory attachment table, not a durable binding model.
 - Agent/runtime abstractions mix provider identity and transport identity, which makes the system harder to evolve.
@@ -45,7 +45,7 @@ This refactor intentionally does not include:
 - keeping `SessionInfo` as the primary runtime model
 - maintaining old `SessionManager` semantics in parallel
 - shipping a compatibility or gray-release layer
-- reusing the old `beam`-specific API shape as a long-term contract
+- reusing the old session-bridging API shape as a long-term contract
 
 This is a direct migration, not a staged dual-stack rollout.
 
@@ -73,7 +73,7 @@ type ProjectId = string;
 
 interface RuntimeSession {
   id: RuntimeSessionId;
-  source: 'atlas-managed' | 'beam' | 'remote';
+  source: 'atlas-managed' | 'external' | 'remote';
   provider: 'claude' | 'codex' | 'gemini' | 'custom';
   transport: 'sdk' | 'acp' | 'mcp' | 'websocket' | 'bridge';
   status: 'starting' | 'running' | 'idle' | 'paused' | 'error' | 'stopped';
@@ -83,7 +83,7 @@ interface RuntimeSession {
   displayName?: string;
 
   resumeHandle?: {
-    kind: 'claude-session' | 'beam-session' | 'remote-runtime';
+    kind: 'claude-session' | 'remote-runtime';
     value: string;
   };
 
@@ -159,7 +159,7 @@ The first version keeps this intentionally thin. It exists to give runtime sessi
 
 ```ts
 interface AgentSpec {
-  id: string; // claude-sdk / claude-beam / codex-remote
+  id: string; // claude-sdk / claude-external / codex-remote
   provider: 'claude' | 'codex' | 'gemini' | 'custom';
   transport: 'sdk' | 'acp' | 'mcp' | 'websocket' | 'bridge';
   displayName: string;
@@ -193,7 +193,7 @@ interface RuntimeRegistry {
 Responsibilities:
 
 - create Atlas-managed runtimes
-- register external runtimes such as `beam`
+- register external runtimes
 - persist runtime state
 - update status and activity timestamps
 - remove dead runtimes
@@ -287,7 +287,7 @@ interface RuntimeAdapter {
 Expected concrete adapters:
 
 - `AtlasClaudeRuntimeAdapter`
-- `BeamRuntimeAdapter`
+- `ExternalRuntimeAdapter`
 - `RemoteRuntimeAdapter`
 
 Future external systems integrate at this boundary.
@@ -402,18 +402,18 @@ Benefits:
 
 ## 12. External Runtime Registration
 
-`beam` becomes one source of runtime registration, not a special session type.
+An external CLI launcher becomes one source of runtime registration, not a special session type.
 
 The long-term API shape is generic external runtime registration, for example:
 
 ```http
 POST /api/runtimes/register
 {
-  "source": "beam",
+  "source": "external",
   "provider": "claude",
   "transport": "bridge",
   "displayName": "fix-bug",
-  "resumeHandle": { "kind": "beam-session", "value": "uuid" },
+  "resumeHandle": { "kind": "claude-session", "value": "uuid" },
   "workspaceId": "default"
 }
 ```
@@ -530,7 +530,7 @@ Expected major changes:
 - replace `AgentBridge` with `RuntimeBridge`
 - introduce `RuntimeRouter`
 - refactor command context away from `sessionManager`
-- refactor `beam` registration endpoints into generic runtime registration endpoints
+- refactor legacy runtime registration endpoints into generic runtime registration endpoints
 - keep `CardEngine`, `CardRenderPipeline`, and channel adapters largely intact, with only dependency rewiring
 
 ## 16. Design Principles

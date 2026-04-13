@@ -2,14 +2,13 @@ import type { Command, CommandContext } from '../CommandRegistry.js';
 
 export const CancelCommand: Command = {
   name: 'cancel',
-  description: 'Cancel the currently running agent task.',
+  description: 'Cancel the currently active runtime task.',
   async execute(_args: string, context: CommandContext): Promise<string> {
-    const session = context.sessionManager.get(context.chatId, context.threadKey);
-    if (!session) {
-      return 'No active session to cancel.';
+    if (!context.binding.activeRuntimeId) {
+      return 'No active runtime to cancel.';
     }
 
-    await context.bridge.cancelSession(session.sessionId);
+    await context.runtimeBridge.cancel(context.binding.activeRuntimeId);
     return 'Task cancelled.';
   },
 };

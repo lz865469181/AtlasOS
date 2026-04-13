@@ -1,16 +1,19 @@
 import type { Command, CommandContext } from '../CommandRegistry.js';
+import { defaultRuntimeSpecForAgent } from '../../runtime/RuntimeSpecs.js';
 
 export const NewCommand: Command = {
   name: 'new',
-  description: 'Reset the current session and start fresh.',
+  description: 'Create a new CodeLink-managed runtime and switch this thread to it.',
   async execute(_args: string, context: CommandContext): Promise<string> {
-    const session = context.sessionManager.get(context.chatId, context.threadKey);
-
-    if (session) {
-      await context.bridge.destroySession(session.sessionId);
-    }
-
-    await context.sessionManager.destroy(context.chatId, context.threadKey);
-    return 'Session reset.';
+    const runtime = await context.runtimeRegistry.create(
+      defaultRuntimeSpecForAgent('claude'),
+      {
+        displayName: 'main',
+        metadata: { permissionMode: 'normal' },
+      },
+    );
+    context.bindingStore.attach(context.binding.bindingId, runtime.id);
+    context.bindingStore.setActive(context.binding.bindingId, runtime.id);
+    return `Started new runtime: ${runtime.displayName ?? runtime.id}`;
   },
 };

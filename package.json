@@ -1,12 +1,12 @@
 {
-  "name": "atlas-ai",
+  "name": "claude-codex-lark-bridge",
   "private": true,
   "scripts": {
-    "build": "yarn workspace atlas-wire build && yarn workspace atlas-agent build && yarn workspace atlas-app-logs build && yarn workspace atlas-gateway build && yarn workspace atlas-cli build",
+    "build": "yarn workspace codelink-wire build && yarn workspace codelink-agent build && yarn workspace codelink-app-logs build && yarn workspace codelink-gateway build && yarn workspace codelink-cli build",
     "test": "yarn workspaces run test",
-    "dev": "yarn workspace atlas-gateway dev",
-    "start": "yarn workspace atlas-cli start",
-    "beam": "node packages/atlas-cli/dist/beam.js"
+    "dev": "yarn workspace codelink-gateway dev",
+    "start": "yarn workspace codelink-cli start",
+    "runtime": "node packages/atlas-cli/dist/runtime.js"
   },
   "workspaces": [
     "packages/*"

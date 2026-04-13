@@ -1,10 +1,12 @@
 export {
+  CodeLinkConfigSchema,
   AtlasConfigSchema,
   FeishuChannelConfigSchema,
   DingTalkChannelConfigSchema,
   AgentConfigSchema,
 } from './ConfigSchema.js';
 export type {
+  CodeLinkConfig,
   AtlasConfig,
   FeishuChannelConfig,
   DingTalkChannelConfig,

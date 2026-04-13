@@ -3,15 +3,15 @@ import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 
 /**
- * Return the default workspace root path: `.atlasOS` under the user's
- * home directory on all platforms.
+ * Return the default workspace root path.
  *
- * - Windows  → C:\Users\<user>\.atlasOS
- * - macOS    → ~/.atlasOS
- * - Linux    → ~/.atlasOS
+ * Prefer `~/.codelink`. If that does not exist but a legacy `~/.atlasOS`
+ * workspace already exists, keep using it for compatibility.
  */
 export function getDefaultWorkspaceRoot(): string {
-  return join(homedir(), ".atlasOS");
+  const codelinkRoot = join(homedir(), ".codelink");
+  const atlasRoot = join(homedir(), ".atlasOS");
+  return existsSync(codelinkRoot) ? codelinkRoot : (existsSync(atlasRoot) ? atlasRoot : codelinkRoot);
 }
 
 const DEFAULT_SOUL = `# Default AI Assistant

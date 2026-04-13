@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { ConfigLoader } from 'atlas-gateway';
+import { ConfigLoader } from 'codelink-gateway';
 import { createApp } from './createApp.js';
 
 // Load config from file → env → runtime
@@ -20,7 +20,7 @@ let shuttingDown = false;
 const shutdown = async () => {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.log('[atlas] Received shutdown signal');
+  console.log('[codelink] Received shutdown signal');
   await app.stop();
   process.exit(0);
 };

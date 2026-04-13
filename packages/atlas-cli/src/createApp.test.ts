@@ -1,9 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createApp } from './createApp.js';
-import type { AtlasConfig } from './createApp.js';
+import type { AtlasConfig, CodeLinkConfig } from './createApp.js';
 
-// Mock atlas-agent so we don't need a real registry
-vi.mock('atlas-agent', () => ({
+vi.mock('codelink-gateway', async () => {
+  return vi.importActual('../../atlas-gateway/src/index.ts');
+});
+
+// Mock codelink-agent so we don't need a real registry
+vi.mock('codelink-agent', () => ({
   agentRegistry: {
     create: vi.fn(() => ({
       startSession: vi.fn(async () => ({ sessionId: 'agent-s1' })),
@@ -116,6 +120,20 @@ describe('createApp', () => {
       agent: { cwd: '.', defaultAgent: 'claude', defaultPermissionMode: 'confirm' },
       idleTimeoutMs: 600000,
       logLevel: 'warn',
+    };
+
+    const app = createApp(config);
+    expect(app).toBeDefined();
+  });
+
+  it('accepts CodeLinkConfig as the preferred config alias', () => {
+    const config: CodeLinkConfig = {
+      channels: {
+        feishu: { appId: 'fid', appSecret: 'fsecret' },
+      },
+      agent: { cwd: '/tmp', defaultAgent: 'claude', defaultPermissionMode: 'auto' },
+      idleTimeoutMs: 300000,
+      logLevel: 'info',
     };
 
     const app = createApp(config);

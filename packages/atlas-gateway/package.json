@@ -1,5 +1,5 @@
 {
-  "name": "atlas-gateway",
+  "name": "codelink-gateway",
   "version": "3.0.0",
   "private": true,
   "type": "module",
@@ -12,8 +12,8 @@
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.38.0",
-    "atlas-agent": "3.0.0",
-    "atlas-wire": "3.0.0",
+    "codelink-agent": "3.0.0",
+    "codelink-wire": "3.0.0",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "qrcode": "^1.5.4",

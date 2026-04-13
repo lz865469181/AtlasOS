@@ -1,43 +1,16 @@
 import type { CardModel } from '../cards/CardModel.js';
 import type { ChannelSender } from '../channel/ChannelSender.js';
-
-// ── Interfaces ──────────────────────────────────────────────────────────────
-
-export interface SessionManagerLike {
-  get(chatId: string, threadKey?: string): { sessionId: string; agentId: string; model?: string; permissionMode: string; createdAt: number; threadKey?: string } | undefined;
-  switchAgent(chatId: string, threadKey: string | undefined, agentId: string): Promise<unknown>;
-  setModel(chatId: string, threadKey: string | undefined, model: string): void;
-  setPermissionMode(chatId: string, threadKey: string | undefined, mode: string): void;
-  destroy(chatId: string, threadKey?: string): Promise<void>;
-  listActive(): Array<{ sessionId: string; chatId: string; agentId: string; threadKey?: string; channelId: string; displayName?: string; createdAt: number; lastActiveAt: number }>;
-  listByChatId?(chatId: string): Array<{ sessionId: string; chatId: string; agentId: string; threadKey?: string; createdAt: number; lastActiveAt: number; lastPrompt?: string; chatHistory?: Array<{ role: 'user' | 'assistant'; text: string; ts: number }> }>;
-  setOwner?(sessionId: string, owner: { type: 'thread' | 'local'; id: string } | undefined): void;
-  removeBySessionId?(sessionId: string): boolean;
-  findByPrefix?(prefix: string): { sessionId: string; chatId: string; agentId: string; channelId: string; displayName?: string; createdAt: number; lastActiveAt: number } | null;
-}
-
-export interface ThreadContextStoreLike {
-  get(chatId: string, threadKey: string): { activeSessionId: string | null; attachedSessions: string[]; defaultSessionId: string | null } | undefined;
-  getOrCreate(chatId: string, threadKey: string): { activeSessionId: string | null; attachedSessions: string[]; defaultSessionId: string | null };
-  setActive(chatId: string, threadKey: string, sessionId: string | null): void;
-  attach(chatId: string, threadKey: string, sessionId: string): void;
-  detach(chatId: string, threadKey: string, sessionId: string): void;
-  setDefault(chatId: string, threadKey: string, sessionId: string): void;
-}
-
-export interface BridgeLike {
-  cancelSession(sessionId: string): Promise<void>;
-  destroySession(sessionId: string): Promise<void>;
-}
+import type { ConversationBinding } from '../runtime/RuntimeModels.js';
+import type { BindingStoreImpl } from '../runtime/BindingStore.js';
+import type { RuntimeRegistryImpl } from '../runtime/RuntimeRegistry.js';
+import type { RuntimeBridgeImpl } from '../runtime/RuntimeBridge.js';
 
 export interface CommandContext {
-  chatId: string;
-  userId: string;
-  threadKey?: string;
-  sessionManager: SessionManagerLike;
-  bridge: BridgeLike;
+  binding: ConversationBinding;
+  runtimeRegistry: RuntimeRegistryImpl;
+  bindingStore: BindingStoreImpl;
+  runtimeBridge: RuntimeBridgeImpl;
   sender: ChannelSender;
-  threadContextStore?: ThreadContextStoreLike;
 }
 
 export interface Command {
@@ -66,8 +39,6 @@ import { DetachCommand } from './commands/DetachCommand.js';
 import { SessionsCommand } from './commands/SessionsCommand.js';
 import { DestroyCommand } from './commands/DestroyCommand.js';
 
-// ── Built-in commands ───────────────────────────────────────────────────────
-
 const helpCommand: Command = {
   name: 'help',
   aliases: ['h', '?'],
@@ -92,12 +63,8 @@ const builtinCommands: Command[] = [
   helpCommand,
 ];
 
-// ── Implementation ──────────────────────────────────────────────────────────
-
 export class CommandRegistryImpl implements CommandRegistry {
-  /** name (lowercase) -> Command */
   private commands = new Map<string, Command>();
-  /** alias (lowercase) -> command name (lowercase) */
   private aliases = new Map<string, string>();
 
   constructor(options?: { registerBuiltins?: boolean }) {
@@ -126,7 +93,6 @@ export class CommandRegistryImpl implements CommandRegistry {
       return null;
     }
 
-    // Extract the command name (first word after /) and the rest as args
     const withoutSlash = trimmed.slice(1);
     const spaceIdx = withoutSlash.indexOf(' ');
     const rawName = (spaceIdx === -1 ? withoutSlash : withoutSlash.slice(0, spaceIdx)).toLowerCase();
@@ -136,13 +102,11 @@ export class CommandRegistryImpl implements CommandRegistry {
       return null;
     }
 
-    // 1. Exact match by name
     const exact = this.commands.get(rawName);
     if (exact) {
       return { command: exact, args };
     }
 
-    // 2. Exact match by alias
     const aliasTarget = this.aliases.get(rawName);
     if (aliasTarget) {
       const cmd = this.commands.get(aliasTarget);
@@ -151,7 +115,6 @@ export class CommandRegistryImpl implements CommandRegistry {
       }
     }
 
-    // 3. Prefix match against names
     const nameMatches: Command[] = [];
     for (const [name, cmd] of this.commands) {
       if (name.startsWith(rawName)) {
@@ -159,7 +122,6 @@ export class CommandRegistryImpl implements CommandRegistry {
       }
     }
 
-    // Also check alias prefixes
     const aliasMatches: Command[] = [];
     for (const [alias, targetName] of this.aliases) {
       if (alias.startsWith(rawName)) {
@@ -170,16 +132,11 @@ export class CommandRegistryImpl implements CommandRegistry {
       }
     }
 
-    const allMatches = [...nameMatches, ...aliasMatches];
-
-    // Deduplicate: a command matched by both name-prefix and alias-prefix counts once
-    const unique = [...new Set(allMatches)];
-
+    const unique = [...new Set([...nameMatches, ...aliasMatches])];
     if (unique.length === 1) {
       return { command: unique[0], args };
     }
 
-    // Ambiguous or no match
     return null;
   }
 

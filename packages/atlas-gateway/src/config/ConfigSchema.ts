@@ -26,7 +26,7 @@ export const AgentConfigSchema = z.object({
 
 // ── Top-level Schema ────────────────────────────────────────────────────────
 
-export const AtlasConfigSchema = z.object({
+export const CodeLinkConfigSchema = z.object({
   channels: z.object({
     feishu: FeishuChannelConfigSchema.optional(),
     dingtalk: DingTalkChannelConfigSchema.optional(),
@@ -36,9 +36,12 @@ export const AtlasConfigSchema = z.object({
   logLevel: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
 });
 
+export const AtlasConfigSchema = CodeLinkConfigSchema;
+
 // ── Inferred Types ──────────────────────────────────────────────────────────
 
 export type FeishuChannelConfig = z.infer<typeof FeishuChannelConfigSchema>;
 export type DingTalkChannelConfig = z.infer<typeof DingTalkChannelConfigSchema>;
 export type AgentConfig = z.infer<typeof AgentConfigSchema>;
-export type AtlasConfig = z.infer<typeof AtlasConfigSchema>;
+export type CodeLinkConfig = z.infer<typeof CodeLinkConfigSchema>;
+export type AtlasConfig = CodeLinkConfig;

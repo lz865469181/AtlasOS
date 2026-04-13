@@ -2,72 +2,51 @@ import type { Command, CommandContext } from '../CommandRegistry.js';
 
 export const SwitchCommand: Command = {
   name: 'switch',
-  description: 'Switch the active session to another already-attached session.',
+  description: 'Switch the active runtime to another already-attached runtime.',
   async execute(args: string, context: CommandContext): Promise<string> {
     const prefix = args.trim();
     if (!prefix) {
-      return 'Usage: /switch <number|name|id> — switch to an attached session (use /sessions to see list)';
+      return 'Usage: /switch <number|name|id> - switch to an attached runtime';
     }
 
-    if (!context.threadContextStore) {
-      return 'Thread context store not available.';
+    if (context.binding.attachedRuntimeIds.length === 0) {
+      return 'No runtimes attached to this thread. Use /attach <id> first.';
     }
 
-    const threadKey = context.threadKey ?? '';
-    const threadCtx = context.threadContextStore.get(context.chatId, threadKey);
-
-    if (!threadCtx || threadCtx.attachedSessions.length === 0) {
-      return 'No sessions attached to this thread. Use /attach <id> first.';
-    }
-
-    const allSessions = context.sessionManager.listActive();
-    const attachedDetails = threadCtx.attachedSessions
-      .map(id => allSessions.find(s => s.sessionId === id))
-      .filter((s): s is NonNullable<typeof s> => s != null);
+    const attachedDetails = context.binding.attachedRuntimeIds
+      .map(id => context.runtimeRegistry.get(id))
+      .filter((runtime): runtime is NonNullable<typeof runtime> => runtime != null);
 
     let target: (typeof attachedDetails)[number] | undefined;
 
-    // Try numeric index first (1-based, matching /sessions order)
     const num = parseInt(prefix, 10);
-    if (!isNaN(num) && String(num) === prefix && num >= 1 && num <= attachedDetails.length) {
+    if (!Number.isNaN(num) && String(num) === prefix && num >= 1 && num <= attachedDetails.length) {
       target = attachedDetails[num - 1];
     }
 
     if (!target) {
-      // Try exact displayName, then prefix on name, then prefix on sessionId
       const lower = prefix.toLowerCase();
-      let matched = attachedDetails.filter(s => s.displayName?.toLowerCase() === lower);
+      let matched = attachedDetails.filter(runtime => runtime.displayName?.toLowerCase() === lower);
       if (matched.length === 0) {
-        matched = attachedDetails.filter(s => s.displayName?.toLowerCase().startsWith(lower));
+        matched = attachedDetails.filter(runtime => runtime.displayName?.toLowerCase().startsWith(lower));
       }
       if (matched.length === 0) {
-        matched = attachedDetails.filter(s => s.sessionId.toLowerCase().startsWith(lower));
+        matched = attachedDetails.filter(runtime => runtime.id.toLowerCase().startsWith(lower));
       }
 
       if (matched.length === 0) {
-        return `No attached session matches: ${prefix}. Use /sessions to see attached sessions.`;
+        return `No attached runtime matches: ${prefix}. Use /sessions to see attached runtimes.`;
       }
       if (matched.length > 1) {
-        return `Ambiguous: ${prefix} matches ${matched.length} sessions. Be more specific.`;
+        return `Ambiguous: ${prefix} matches ${matched.length} runtimes. Be more specific.`;
       }
       target = matched[0];
     }
 
-    const targetId = target.sessionId;
+    context.bindingStore.setActive(context.binding.bindingId, target.id);
+    context.bindingStore.attach(context.binding.bindingId, target.id);
 
-    // Re-takeover: set owner
-    if (context.sessionManager.setOwner) {
-      context.sessionManager.setOwner(targetId, {
-        type: 'thread',
-        id: `${context.chatId}:${threadKey}`,
-      });
-    }
-
-    // Set as active and move to front of MRU
-    context.threadContextStore.setActive(context.chatId, threadKey, targetId);
-    context.threadContextStore.attach(context.chatId, threadKey, targetId); // moves to front
-
-    const label = target.displayName ?? targetId.slice(0, 8);
-    return `Switched to **${label}** [${target.agentId}].`;
+    const label = target.displayName ?? target.id.slice(0, 8);
+    return `Switched to **${label}** [${target.provider}].`;
   },
 };

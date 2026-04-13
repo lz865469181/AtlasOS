@@ -1,6 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { CommandRegistryImpl, type Command, type CommandContext, type BridgeLike, type SessionManagerLike } from './CommandRegistry.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { CommandRegistryImpl, type Command, type CommandContext } from './CommandRegistry.js';
 import type { ChannelSender } from '../channel/ChannelSender.js';
+import { BindingStoreImpl } from '../runtime/BindingStore.js';
+import { RuntimeRegistryImpl } from '../runtime/RuntimeRegistry.js';
+import type { RuntimeSession } from '../runtime/RuntimeModels.js';
 
 describe('CommandRegistry', () => {
   let registry: CommandRegistryImpl;
@@ -8,8 +11,6 @@ describe('CommandRegistry', () => {
   beforeEach(() => {
     registry = new CommandRegistryImpl();
   });
-
-  // ── register ────────────────────────────────────────────────────────────
 
   describe('register', () => {
     it('should register a custom command', () => {
@@ -37,9 +38,7 @@ describe('CommandRegistry', () => {
     });
   });
 
-  // ── resolve: exact match ────────────────────────────────────────────────
-
-  describe('resolve – exact match', () => {
+  describe('resolve - exact match', () => {
     it('should resolve a built-in command by exact name', () => {
       const result = registry.resolve('/help');
       expect(result).not.toBeNull();
@@ -62,9 +61,7 @@ describe('CommandRegistry', () => {
     });
   });
 
-  // ── resolve: case-insensitive ───────────────────────────────────────────
-
-  describe('resolve – case-insensitive', () => {
+  describe('resolve - case-insensitive', () => {
     it('should match regardless of case', () => {
       const result = registry.resolve('/HELP');
       expect(result).not.toBeNull();
@@ -83,15 +80,12 @@ describe('CommandRegistry', () => {
         description: 'Deploy the app',
         execute: async () => 'ok',
       });
-      // Name is stored lowercase
       expect(registry.resolve('/deploy')).not.toBeNull();
       expect(registry.resolve('/DEPLOY')).not.toBeNull();
     });
   });
 
-  // ── resolve: aliases ────────────────────────────────────────────────────
-
-  describe('resolve – aliases', () => {
+  describe('resolve - aliases', () => {
     it('should resolve built-in help by alias "h"', () => {
       const result = registry.resolve('/h');
       expect(result).not.toBeNull();
@@ -111,9 +105,7 @@ describe('CommandRegistry', () => {
     });
   });
 
-  // ── resolve: prefix matching ────────────────────────────────────────────
-
-  describe('resolve – prefix matching', () => {
+  describe('resolve - prefix matching', () => {
     it('should match unambiguous prefix', () => {
       const result = registry.resolve('/he');
       expect(result).not.toBeNull();
@@ -121,27 +113,20 @@ describe('CommandRegistry', () => {
     });
 
     it('should match single-char unambiguous prefix', () => {
-      // /a -> only "agent" starts with "a" (among name prefixes)
       const result = registry.resolve('/ag');
       expect(result).not.toBeNull();
       expect(result!.command.name).toBe('agent');
     });
 
     it('should return null for ambiguous prefix', () => {
-      // /mo matches both "model" and "mode"
       const result = registry.resolve('/mo');
       expect(result).toBeNull();
     });
 
     it('should resolve longer unambiguous prefix', () => {
-      // /mod -> ambiguous (model, mode)
       expect(registry.resolve('/mod')).toBeNull();
-
-      // /mode -> exact match
       expect(registry.resolve('/mode')).not.toBeNull();
       expect(registry.resolve('/mode')!.command.name).toBe('mode');
-
-      // /model -> exact match
       expect(registry.resolve('/model')).not.toBeNull();
       expect(registry.resolve('/model')!.command.name).toBe('model');
     });
@@ -160,9 +145,7 @@ describe('CommandRegistry', () => {
     });
   });
 
-  // ── resolve: non-slash input / edge cases ───────────────────────────────
-
-  describe('resolve – non-slash and edge cases', () => {
+  describe('resolve - non-slash and edge cases', () => {
     it('should return null for non-slash input', () => {
       expect(registry.resolve('hello')).toBeNull();
     });
@@ -189,8 +172,6 @@ describe('CommandRegistry', () => {
       expect(result!.command.name).toBe('help');
     });
   });
-
-  // ── listCommands ────────────────────────────────────────────────────────
 
   describe('listCommands', () => {
     it('should list all built-in commands', () => {
@@ -224,8 +205,6 @@ describe('CommandRegistry', () => {
     });
   });
 
-  // ── no builtins mode ────────────────────────────────────────────────────
-
   describe('no builtins mode', () => {
     it('should start empty when registerBuiltins is false', () => {
       const empty = new CommandRegistryImpl({ registerBuiltins: false });
@@ -244,8 +223,6 @@ describe('CommandRegistry', () => {
     });
   });
 
-  // ── execute: help ─────────────────────────────────────────────────────
-
   describe('built-in help', () => {
     it('should return a string listing commands', async () => {
       const result = registry.resolve('/help');
@@ -256,138 +233,313 @@ describe('CommandRegistry', () => {
     });
   });
 
-  // ── execute: real commands ──────────────────────────────────────────────
-
   describe('real command implementations', () => {
-    function makeContext(overrides?: {
-      session?: Record<string, unknown> | undefined | null;
-      sessions?: Array<Record<string, unknown>>;
-    }): CommandContext {
-      const hasSessionOverride = overrides !== undefined && 'session' in overrides;
-      const session = hasSessionOverride
-        ? overrides.session ?? undefined
-        : { sessionId: 's1', chatId: 'chat-1', channelId: 'feishu', agentId: 'claude', model: 'opus', permissionMode: 'auto', createdAt: Date.now() - 60_000 };
-      const sessions = overrides?.sessions ?? (session ? [session] : []);
+    function makeRuntime(overrides?: Partial<RuntimeSession>): RuntimeSession {
+      const now = Date.now() - 60_000;
+      return {
+        id: 'runtime-1',
+        source: 'atlas-managed',
+        provider: 'claude',
+        transport: 'sdk',
+        status: 'idle',
+        displayName: 'main',
+        capabilities: {
+          streaming: true,
+          permissionCards: true,
+          fileAccess: false,
+          imageInput: false,
+          terminalOutput: false,
+          patchEvents: false,
+        },
+        metadata: {
+          model: 'opus',
+          permissionMode: 'auto',
+        },
+        createdAt: now,
+        lastActiveAt: now,
+        ...overrides,
+      };
+    }
+
+    async function makeContext(overrides?: {
+      runtimes?: RuntimeSession[];
+      activeRuntimeId?: string | null;
+      attachedRuntimeIds?: string[];
+    }): Promise<CommandContext & { runtimeBridge: { cancel: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn> } }> {
+      const runtimeRegistry = new RuntimeRegistryImpl();
+      const bindingStore = new BindingStoreImpl();
+      const binding = bindingStore.getOrCreate('feishu', 'chat-1', 'chat-1');
+      const runtimes = overrides?.runtimes ?? [makeRuntime()];
+
+      for (const runtime of runtimes) {
+        await runtimeRegistry.registerExternal(runtime);
+      }
+
+      for (const runtimeId of overrides?.attachedRuntimeIds ?? runtimes.map((runtime) => runtime.id)) {
+        bindingStore.attach(binding.bindingId, runtimeId);
+      }
+
+      if (overrides?.activeRuntimeId !== undefined) {
+        bindingStore.setActive(binding.bindingId, overrides.activeRuntimeId);
+      } else if (runtimes[0]) {
+        bindingStore.setActive(binding.bindingId, runtimes[0].id);
+      }
+
+      const runtimeBridge = {
+        sendPrompt: vi.fn(),
+        cancel: vi.fn().mockResolvedValue(undefined),
+        respondToPermission: vi.fn().mockResolvedValue(undefined),
+        dispose: vi.fn().mockResolvedValue(undefined),
+      };
 
       return {
-        chatId: 'chat-1',
-        userId: 'user-1',
-        sessionManager: {
-          get: vi.fn().mockReturnValue(session),
-          switchAgent: vi.fn().mockResolvedValue({}),
-          setModel: vi.fn(),
-          setPermissionMode: vi.fn(),
-          destroy: vi.fn().mockResolvedValue(undefined),
-          listActive: vi.fn().mockReturnValue(sessions),
-        },
-        bridge: {
-          cancelSession: vi.fn().mockResolvedValue(undefined),
-          destroySession: vi.fn().mockResolvedValue(undefined),
-        },
+        binding,
+        runtimeRegistry,
+        bindingStore,
+        runtimeBridge: runtimeBridge as never,
         sender: {
           sendText: vi.fn().mockResolvedValue(undefined),
           sendCard: vi.fn().mockResolvedValue(undefined),
           updateCard: vi.fn().mockResolvedValue(undefined),
         } as unknown as ChannelSender,
-      };
+      } as CommandContext & { runtimeBridge: { cancel: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn> } };
     }
 
-    it('/cancel calls bridge.cancelSession', async () => {
-      const ctx = makeContext();
+    it('/cancel calls runtimeBridge.cancel', async () => {
+      const ctx = await makeContext();
       const result = registry.resolve('/cancel');
       const output = await result!.command.execute('', ctx);
-      expect(ctx.bridge.cancelSession).toHaveBeenCalledWith('s1');
+      expect(ctx.runtimeBridge.cancel).toHaveBeenCalledWith('runtime-1');
       expect(output).toBe('Task cancelled.');
     });
 
-    it('/cancel with no session', async () => {
-      const ctx = makeContext({ session: null });
+    it('/cancel with no active runtime', async () => {
+      const ctx = await makeContext({ runtimes: [], activeRuntimeId: null, attachedRuntimeIds: [] });
       const result = registry.resolve('/cancel');
       const output = await result!.command.execute('', ctx);
-      expect(output).toBe('No active session to cancel.');
+      expect(output).toBe('No active runtime to cancel.');
     });
 
-    it('/status returns session info', async () => {
-      const ctx = makeContext();
+    it('/status returns runtime info', async () => {
+      const ctx = await makeContext();
       const result = registry.resolve('/status');
       const output = await result!.command.execute('', ctx);
-      expect(output).toContain('Agent: claude');
+      expect(output).toContain('Provider: claude');
+      expect(output).toContain('Transport: sdk');
       expect(output).toContain('Model: opus');
       expect(output).toContain('Mode: auto');
     });
 
-    it('/status with no session', async () => {
-      const ctx = makeContext({ session: null });
+    it('/status highlights tmux-backed runtimes', async () => {
+      const ctx = await makeContext({
+        runtimes: [makeRuntime({
+          id: 'runtime-tmux-1',
+          displayName: 'local-claude',
+          source: 'external',
+          transport: 'tmux',
+          resumeHandle: { kind: 'tmux-session', value: 'atlas-local-claude' },
+          capabilities: {
+            streaming: true,
+            permissionCards: false,
+            fileAccess: true,
+            imageInput: false,
+            terminalOutput: true,
+            patchEvents: false,
+          },
+        })],
+      });
       const result = registry.resolve('/status');
       const output = await result!.command.execute('', ctx);
-      expect(output).toBe('No active session.');
+      expect(output).toContain('Runtime: local-claude [claude/tmux]');
+      expect(output).toContain('Resume: tmux-session atlas-local-claude');
     });
 
-    it('/agent with no args lists current', async () => {
-      const ctx = makeContext();
+    it('/status with no active runtime', async () => {
+      const ctx = await makeContext({ runtimes: [], activeRuntimeId: null, attachedRuntimeIds: [] });
+      const result = registry.resolve('/status');
+      const output = await result!.command.execute('', ctx);
+      expect(output).toBe('No active runtime.');
+    });
+
+    it('/agent with no args lists current provider', async () => {
+      const ctx = await makeContext();
       const result = registry.resolve('/agent');
       const output = await result!.command.execute('', ctx);
       expect(output).toContain('Current agent: claude');
     });
 
-    it('/agent with arg switches agent', async () => {
-      const ctx = makeContext();
+    it('/agent with arg creates and switches runtime', async () => {
+      const ctx = await makeContext();
       const result = registry.resolve('/agent');
       const output = await result!.command.execute('gemini', ctx);
-      expect(ctx.bridge.destroySession).toHaveBeenCalledWith('s1');
-      expect(ctx.sessionManager.switchAgent).toHaveBeenCalledWith('chat-1', undefined, 'gemini');
+
+      const activeRuntimeId = ctx.binding.activeRuntimeId;
+      expect(activeRuntimeId).toBeTruthy();
+      expect(activeRuntimeId).not.toBe('runtime-1');
+      expect(ctx.runtimeRegistry.get(activeRuntimeId!)).toMatchObject({
+        displayName: 'gemini',
+        provider: 'gemini',
+      });
       expect(output).toBe('Switched to agent: gemini');
     });
 
     it('/model with no args shows current', async () => {
-      const ctx = makeContext();
+      const ctx = await makeContext();
       const result = registry.resolve('/model');
       const output = await result!.command.execute('', ctx);
       expect(output).toContain('Current model: opus');
     });
 
     it('/model with arg sets model', async () => {
-      const ctx = makeContext();
+      const ctx = await makeContext();
       const result = registry.resolve('/model');
       const output = await result!.command.execute('sonnet', ctx);
-      expect(ctx.sessionManager.setModel).toHaveBeenCalledWith('chat-1', undefined, 'sonnet');
+      expect(ctx.runtimeRegistry.get('runtime-1')?.metadata.model).toBe('sonnet');
       expect(output).toBe('Model set to: sonnet');
     });
 
     it('/mode with no args shows current', async () => {
-      const ctx = makeContext();
+      const ctx = await makeContext();
       const result = registry.resolve('/mode');
       const output = await result!.command.execute('', ctx);
       expect(output).toContain('Current mode: auto');
     });
 
     it('/mode with valid arg sets mode', async () => {
-      const ctx = makeContext();
+      const ctx = await makeContext();
       const result = registry.resolve('/mode');
       const output = await result!.command.execute('deny', ctx);
-      expect(ctx.sessionManager.setPermissionMode).toHaveBeenCalledWith('chat-1', undefined, 'deny');
+      expect(ctx.runtimeRegistry.get('runtime-1')?.metadata.permissionMode).toBe('deny');
       expect(output).toBe('Permission mode set to: deny');
     });
 
     it('/mode with invalid arg returns error', async () => {
-      const ctx = makeContext();
+      const ctx = await makeContext();
       const result = registry.resolve('/mode');
       const output = await result!.command.execute('yolo', ctx);
       expect(output).toContain('Invalid mode');
     });
 
-    it('/new destroys session and bridge', async () => {
-      const ctx = makeContext();
+    it('/new creates and switches to a fresh runtime', async () => {
+      const ctx = await makeContext();
       const result = registry.resolve('/new');
       const output = await result!.command.execute('', ctx);
-      expect(ctx.bridge.destroySession).toHaveBeenCalledWith('s1');
-      expect(ctx.sessionManager.destroy).toHaveBeenCalledWith('chat-1', undefined);
-      expect(output).toBe('Session reset.');
+      expect(ctx.binding.activeRuntimeId).toBeTruthy();
+      expect(ctx.binding.activeRuntimeId).not.toBe('runtime-1');
+      expect(output).toContain('Started new runtime: main');
     });
 
-  });
+    it('/attach reports tmux-backed runtime routing', async () => {
+      const ctx = await makeContext({
+        runtimes: [
+          makeRuntime({ id: 'runtime-sdk-1', displayName: 'main' }),
+          makeRuntime({
+            id: 'runtime-tmux-1',
+            displayName: 'local-claude',
+            source: 'external',
+            transport: 'tmux',
+            resumeHandle: { kind: 'tmux-session', value: 'atlas-local-claude' },
+            capabilities: {
+              streaming: true,
+              permissionCards: false,
+              fileAccess: true,
+              imageInput: false,
+              terminalOutput: true,
+              patchEvents: false,
+            },
+          }),
+        ],
+      });
+      const result = registry.resolve('/attach');
+      const output = await result!.command.execute('local-claude', ctx);
 
-  // ── prefix match with aliases dedup ─────────────────────────────────────
+      expect(ctx.binding.activeRuntimeId).toBe('runtime-tmux-1');
+      expect(output).toContain('Attached to **local-claude** [claude/tmux]');
+      expect(output).toContain('tmux-backed runtime');
+    });
+
+    it('/attach reports codex tmux runtimes the same way', async () => {
+      const ctx = await makeContext({
+        runtimes: [
+          makeRuntime({
+            id: 'runtime-codex-1',
+            displayName: 'codex-local',
+            source: 'external',
+            provider: 'codex',
+            transport: 'tmux',
+            capabilities: {
+              streaming: true,
+              permissionCards: false,
+              fileAccess: true,
+              imageInput: false,
+              terminalOutput: true,
+              patchEvents: false,
+            },
+          }),
+        ],
+      });
+      const result = registry.resolve('/attach');
+      const output = await result!.command.execute('codex-local', ctx);
+
+      expect(ctx.binding.activeRuntimeId).toBe('runtime-codex-1');
+      expect(output).toContain('Attached to **codex-local** [codex/tmux]');
+      expect(output).toContain('tmux-backed runtime');
+    });
+
+    it('/sessions shows provider and transport for attached tmux runtimes', async () => {
+      const ctx = await makeContext({
+        runtimes: [
+          makeRuntime({ id: 'runtime-sdk-1', displayName: 'main' }),
+          makeRuntime({
+            id: 'runtime-tmux-1',
+            displayName: 'local-claude',
+            source: 'external',
+            transport: 'tmux',
+            capabilities: {
+              streaming: true,
+              permissionCards: false,
+              fileAccess: true,
+              imageInput: false,
+              terminalOutput: true,
+              patchEvents: false,
+            },
+          }),
+        ],
+        activeRuntimeId: 'runtime-tmux-1',
+      });
+      const result = registry.resolve('/sessions');
+      const output = await result!.command.execute('', ctx);
+
+      expect(output).toContain('**main** [claude/sdk]');
+      expect(output).toContain('**local-claude** [claude/tmux]');
+    });
+
+    it('/list shows tmux transport on bindings and runtimes', async () => {
+      const ctx = await makeContext({
+        runtimes: [
+          makeRuntime({
+            id: 'runtime-tmux-1',
+            displayName: 'local-claude',
+            source: 'external',
+            transport: 'tmux',
+            capabilities: {
+              streaming: true,
+              permissionCards: false,
+              fileAccess: true,
+              imageInput: false,
+              terminalOutput: true,
+              patchEvents: false,
+            },
+          }),
+        ],
+      });
+      const result = registry.resolve('/list');
+      const output = await result!.command.execute('', ctx);
+
+      expect(output).toContain('active: local-claude [claude/tmux]');
+      expect(output).toContain('**local-claude** [claude/tmux]');
+    });
+  });
 
   describe('prefix match deduplication', () => {
     it('should not double-count a command matched by both name and alias prefix', () => {
@@ -398,7 +550,6 @@ describe('CommandRegistry', () => {
         description: 'Greet',
         execute: async () => 'hi',
       });
-      // /he matches name "hello" by prefix AND alias "hey" by prefix, but both refer to same command
       const result = reg.resolve('/he');
       expect(result).not.toBeNull();
       expect(result!.command.name).toBe('hello');
@@ -418,8 +569,6 @@ describe('CommandRegistry', () => {
         description: 'Beta',
         execute: async () => 'b',
       });
-      // /a -> name prefix matches "alpha", alias prefix "aaa" -> alpha, alias prefix "ab" -> beta
-      // Two distinct commands -> ambiguous
       expect(reg.resolve('/a')).toBeNull();
     });
   });

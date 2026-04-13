@@ -13,7 +13,7 @@ import type {
   ExecApprovalRequestMessage,
   PatchApplyBeginMessage,
   PatchApplyEndMessage,
-} from 'atlas-agent';
+} from 'codelink-agent';
 import type { CardModel } from '../cards/CardModel.js';
 import { CardStateStoreImpl } from './CardStateStore.js';
 import { MessageCorrelationStoreImpl } from './MessageCorrelationStore.js';

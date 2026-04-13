@@ -1,47 +1,49 @@
-import { AtlasConfigSchema } from './ConfigSchema.js';
-import type { AtlasConfig } from './ConfigSchema.js';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-
-// ── Types ───────────────────────────────────────────────────────────────────
+import { CodeLinkConfigSchema } from './ConfigSchema.js';
+import type { CodeLinkConfig } from './ConfigSchema.js';
 
 export interface ConfigLoaderOptions {
-  /** Path to config file. If omitted, searches CWD. */
   configPath?: string;
-  /** Runtime overrides (highest priority). */
-  overrides?: DeepPartial<AtlasConfig>;
+  overrides?: DeepPartial<CodeLinkConfig>;
 }
 
-/** Deep partial helper — makes all nested properties optional. */
 export type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K];
 };
 
-// ── Environment variable mapping ────────────────────────────────────────────
+interface EnvMapping {
+  envNames: string[];
+  path: string[];
+  parser?: (value: string) => unknown;
+}
 
-const ENV_MAP: Array<{ env: string; path: string[] }> = [
-  { env: 'FEISHU_APP_ID', path: ['channels', 'feishu', 'appId'] },
-  { env: 'FEISHU_APP_SECRET', path: ['channels', 'feishu', 'appSecret'] },
-  { env: 'FEISHU_VERIFICATION_TOKEN', path: ['channels', 'feishu', 'verificationToken'] },
-  { env: 'DINGTALK_APP_KEY', path: ['channels', 'dingtalk', 'appKey'] },
-  { env: 'DINGTALK_APP_SECRET', path: ['channels', 'dingtalk', 'appSecret'] },
-  { env: 'DINGTALK_MODE', path: ['channels', 'dingtalk', 'mode'] },
-  { env: 'AGENT_CWD', path: ['agent', 'cwd'] },
-  { env: 'AGENT_DEFAULT_AGENT', path: ['agent', 'defaultAgent'] },
-  { env: 'AGENT_DEFAULT_MODEL', path: ['agent', 'defaultModel'] },
-  { env: 'AGENT_PERMISSION_MODE', path: ['agent', 'defaultPermissionMode'] },
-  { env: 'ATLAS_LOG_LEVEL', path: ['logLevel'] },
-  { env: 'ATLAS_IDLE_TIMEOUT', path: ['idleTimeoutMs'] },
+const numberParser = (value: string): number | string => {
+  const parsed = Number(value);
+  return Number.isNaN(parsed) ? value : parsed;
+};
+
+const ENV_MAP: EnvMapping[] = [
+  { envNames: ['FEISHU_APP_ID'], path: ['channels', 'feishu', 'appId'] },
+  { envNames: ['FEISHU_APP_SECRET'], path: ['channels', 'feishu', 'appSecret'] },
+  { envNames: ['FEISHU_VERIFICATION_TOKEN'], path: ['channels', 'feishu', 'verificationToken'] },
+  { envNames: ['DINGTALK_APP_KEY'], path: ['channels', 'dingtalk', 'appKey'] },
+  { envNames: ['DINGTALK_APP_SECRET'], path: ['channels', 'dingtalk', 'appSecret'] },
+  { envNames: ['DINGTALK_MODE'], path: ['channels', 'dingtalk', 'mode'] },
+  { envNames: ['AGENT_CWD'], path: ['agent', 'cwd'] },
+  { envNames: ['AGENT_DEFAULT_AGENT'], path: ['agent', 'defaultAgent'] },
+  { envNames: ['AGENT_DEFAULT_MODEL'], path: ['agent', 'defaultModel'] },
+  { envNames: ['AGENT_PERMISSION_MODE'], path: ['agent', 'defaultPermissionMode'] },
+  { envNames: ['CODELINK_LOG_LEVEL', 'ATLAS_LOG_LEVEL'], path: ['logLevel'] },
+  {
+    envNames: ['CODELINK_IDLE_TIMEOUT', 'ATLAS_IDLE_TIMEOUT'],
+    path: ['idleTimeoutMs'],
+    parser: numberParser,
+  },
 ];
 
-// ── ConfigLoader ────────────────────────────────────────────────────────────
-
 export class ConfigLoader {
-  /**
-   * Load and validate config from all sources.
-   * Resolution order: file → env → overrides (later wins).
-   */
-  static async load(opts?: ConfigLoaderOptions): Promise<AtlasConfig> {
+  static async load(opts?: ConfigLoaderOptions): Promise<CodeLinkConfig> {
     const fileConfig = await ConfigLoader.fromFile(opts?.configPath);
     const envConfig = ConfigLoader.fromEnv();
     const merged = ConfigLoader.merge(
@@ -49,82 +51,77 @@ export class ConfigLoader {
       envConfig,
       opts?.overrides ?? {},
     );
-    return AtlasConfigSchema.parse(merged);
+    return CodeLinkConfigSchema.parse(merged);
   }
 
-  /**
-   * Build partial config from environment variables.
-   */
-  static fromEnv(env?: Record<string, string | undefined>): DeepPartial<AtlasConfig> {
+  static fromEnv(env?: Record<string, string | undefined>): DeepPartial<CodeLinkConfig> {
     const source = env ?? process.env;
     const result: Record<string, unknown> = {};
 
     for (const mapping of ENV_MAP) {
-      const value = source[mapping.env];
-      if (value === undefined || value === '') continue;
-
-      // Convert numeric values
-      let parsed: unknown = value;
-      if (mapping.env === 'ATLAS_IDLE_TIMEOUT') {
-        const num = Number(value);
-        if (!Number.isNaN(num)) parsed = num;
+      const value = resolveEnvValue(source, mapping.envNames);
+      if (value === undefined || value === '') {
+        continue;
       }
-
-      // Set nested path
-      setNestedValue(result, mapping.path, parsed);
+      setNestedValue(result, mapping.path, mapping.parser ? mapping.parser(value) : value);
     }
 
-    return result as DeepPartial<AtlasConfig>;
+    return result as DeepPartial<CodeLinkConfig>;
   }
 
-  /**
-   * Read config file if it exists.
-   * Supports JSON files only (atlas.config.json).
-   */
-  static async fromFile(path?: string): Promise<DeepPartial<AtlasConfig> | null> {
+  static async fromFile(path?: string): Promise<DeepPartial<CodeLinkConfig> | null> {
     const candidates = path
       ? [path]
       : [
+          join(process.cwd(), 'codelink.config.json'),
           join(process.cwd(), 'atlas.config.json'),
         ];
 
     for (const candidate of candidates) {
       try {
         const raw = await readFile(candidate, 'utf-8');
-        return JSON.parse(raw) as DeepPartial<AtlasConfig>;
+        return JSON.parse(raw) as DeepPartial<CodeLinkConfig>;
       } catch {
-        // File not found or parse error — try next
         continue;
       }
     }
+
     return null;
   }
 
-  /**
-   * Deep merge configs. Later sources override earlier ones.
-   */
-  static merge(...configs: Array<DeepPartial<AtlasConfig>>): DeepPartial<AtlasConfig> {
+  static merge(...configs: Array<DeepPartial<CodeLinkConfig>>): DeepPartial<CodeLinkConfig> {
     const result: Record<string, unknown> = {};
     for (const config of configs) {
       deepMerge(result, config as Record<string, unknown>);
     }
-    return result as DeepPartial<AtlasConfig>;
+    return result as DeepPartial<CodeLinkConfig>;
   }
 }
 
-// ── Helpers ─────────────────────────────────────────────────────────────────
-
 function setNestedValue(obj: Record<string, unknown>, path: string[], value: unknown): void {
   let current = obj;
-  for (let i = 0; i < path.length - 1; i++) {
+  for (let i = 0; i < path.length - 1; i += 1) {
     const key = path[i]!;
     if (!(key in current) || typeof current[key] !== 'object' || current[key] === null) {
       current[key] = {};
     }
     current = current[key] as Record<string, unknown>;
   }
-  const lastKey = path[path.length - 1]!;
-  current[lastKey] = value;
+
+  current[path[path.length - 1]!] = value;
+}
+
+function resolveEnvValue(
+  source: Record<string, string | undefined>,
+  envNames: string[],
+): string | undefined {
+  for (const envName of envNames) {
+    const value = source[envName];
+    if (value !== undefined && value !== '') {
+      return value;
+    }
+  }
+  return undefined;
 }
 
 function deepMerge(target: Record<string, unknown>, source: Record<string, unknown>): void {

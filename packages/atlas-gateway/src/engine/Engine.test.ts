@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EngineImpl } from './Engine.js';
-import type { EngineDeps, CardActionEvent, OnPromptCallback } from './Engine.js';
+import type { CardActionEvent, EngineDeps } from './Engine.js';
 import type { ChannelEvent } from '../channel/channelEvent.js';
 import type { ChannelSender, SenderFactory } from '../channel/ChannelSender.js';
 import type { CardModel } from '../cards/CardModel.js';
@@ -8,11 +8,12 @@ import type { CardStateStoreImpl } from './CardStateStore.js';
 import type { MessageCorrelationStoreImpl } from './MessageCorrelationStore.js';
 import type { CardRenderPipeline } from './CardRenderPipeline.js';
 import type { CardEngineImpl } from './CardEngine.js';
-import type { SessionManagerImpl, SessionInfo } from './SessionManager.js';
 import type { CommandRegistryImpl, Command } from './CommandRegistry.js';
 import type { PermissionService } from './PermissionService.js';
-
-// -- Mock Factories ----------------------------------------------------------
+import { BindingStoreImpl } from '../runtime/BindingStore.js';
+import type { RuntimeRouterImpl } from '../runtime/RuntimeRouter.js';
+import type { RuntimeBridgeImpl } from '../runtime/RuntimeBridge.js';
+import type { RuntimeRegistryImpl } from '../runtime/RuntimeRegistry.js';
 
 function mockSender(): ChannelSender {
   return {
@@ -25,43 +26,11 @@ function mockSender(): ChannelSender {
 
 function mockSenderFactory(): { factory: SenderFactory; lastSender: () => ChannelSender } {
   let last: ChannelSender;
-  const factory = vi.fn((_chatId: string) => {
+  const factory = vi.fn((_chatId: string, _channelIdHint?: string) => {
     last = mockSender();
     return last;
   }) as unknown as SenderFactory;
   return { factory, lastSender: () => last };
-}
-
-function mockSessionManager(): SessionManagerImpl {
-  const sessions = new Map<string, SessionInfo>();
-
-  return {
-    getOrCreate: vi.fn(async (chatId: string) => {
-      if (sessions.has(chatId)) {
-        return sessions.get(chatId)!;
-      }
-      const session: SessionInfo = {
-        sessionId: `session-${chatId}`,
-        chatId,
-        channelId: 'feishu',
-        agentId: 'claude',
-        permissionMode: 'normal',
-        createdAt: Date.now(),
-        lastActiveAt: Date.now(),
-      };
-      sessions.set(chatId, session);
-      return session;
-    }),
-    get: vi.fn((chatId: string) => sessions.get(chatId)),
-    destroy: vi.fn(async () => {}),
-    switchAgent: vi.fn(async () => ({} as SessionInfo)),
-    setModel: vi.fn(),
-    setPermissionMode: vi.fn(),
-    listActive: vi.fn(() => []),
-    appendChat: vi.fn(),
-    persist: vi.fn(async () => {}),
-    restore: vi.fn(async () => {}),
-  } as unknown as SessionManagerImpl;
 }
 
 function mockCommandRegistry(
@@ -79,6 +48,7 @@ function mockCardEngine(): CardEngineImpl {
     handleMessage: vi.fn(),
     handlePermissionResponse: vi.fn(),
     getStreamingState: vi.fn(),
+    setReplyTarget: vi.fn(),
     dispose: vi.fn(),
   } as unknown as CardEngineImpl;
 }
@@ -95,6 +65,35 @@ function mockPermissionService(): PermissionService {
   } as unknown as PermissionService;
 }
 
+function mockRuntimeRegistry(): RuntimeRegistryImpl {
+  return {
+    get: vi.fn(),
+    list: vi.fn().mockReturnValue([]),
+    update: vi.fn(),
+    persist: vi.fn().mockResolvedValue(undefined),
+    restore: vi.fn().mockResolvedValue(undefined),
+  } as unknown as RuntimeRegistryImpl;
+}
+
+function mockRuntimeRouter(kind: 'missing' | 'runtime' = 'missing'): RuntimeRouterImpl {
+  return {
+    resolveTarget: vi.fn().mockResolvedValue(
+      kind === 'runtime'
+        ? { kind: 'runtime', bindingId: 'ch-1:chat-1:chat-1', runtimeId: 'runtime-1' }
+        : { kind: 'missing', bindingId: 'ch-1:chat-1:chat-1' },
+    ),
+  } as unknown as RuntimeRouterImpl;
+}
+
+function mockRuntimeBridge(): RuntimeBridgeImpl {
+  return {
+    sendPrompt: vi.fn().mockResolvedValue(undefined),
+    cancel: vi.fn().mockResolvedValue(undefined),
+    respondToPermission: vi.fn().mockResolvedValue(undefined),
+    dispose: vi.fn().mockResolvedValue(undefined),
+  } as unknown as RuntimeBridgeImpl;
+}
+
 function createDeps(overrides?: Partial<EngineDeps>): EngineDeps {
   const { factory } = mockSenderFactory();
   return {
@@ -102,7 +101,10 @@ function createDeps(overrides?: Partial<EngineDeps>): EngineDeps {
     correlationStore: {} as MessageCorrelationStoreImpl,
     pipeline: mockPipeline(),
     cardEngine: mockCardEngine(),
-    sessionManager: mockSessionManager(),
+    runtimeRegistry: mockRuntimeRegistry(),
+    bindingStore: new BindingStoreImpl(),
+    runtimeRouter: mockRuntimeRouter(),
+    runtimeBridge: mockRuntimeBridge(),
     commandRegistry: mockCommandRegistry(),
     permissionService: mockPermissionService(),
     senderFactory: factory,
@@ -123,21 +125,6 @@ function textEvent(text: string, overrides?: Partial<ChannelEvent>): ChannelEven
   };
 }
 
-function imageEvent(overrides?: Partial<ChannelEvent>): ChannelEvent {
-  return {
-    channelId: 'ch-1',
-    chatId: 'chat-1',
-    userId: 'user-1',
-    userName: 'Test User',
-    messageId: 'msg-evt-img',
-    content: { type: 'image', url: 'https://example.com/img.png' },
-    timestamp: Date.now(),
-    ...overrides,
-  };
-}
-
-// -- Tests -------------------------------------------------------------------
-
 describe('Engine', () => {
   let deps: EngineDeps;
   let engine: EngineImpl;
@@ -147,24 +134,24 @@ describe('Engine', () => {
     engine = new EngineImpl(deps);
   });
 
-  // -- Lifecycle -----------------------------------------------------------
-
   describe('start()', () => {
-    it('restores session manager', async () => {
+    it('restores runtime registry and binding store', async () => {
+      const restoreSpy = vi.spyOn(deps.bindingStore, 'restore');
       await engine.start();
-      expect(deps.sessionManager.restore).toHaveBeenCalledOnce();
+      expect(deps.runtimeRegistry.restore).toHaveBeenCalledOnce();
+      expect(restoreSpy).toHaveBeenCalledOnce();
     });
   });
 
   describe('stop()', () => {
-    it('persists session manager and disposes pipeline', async () => {
+    it('persists runtime registry and binding store, then disposes pipeline', async () => {
+      const persistSpy = vi.spyOn(deps.bindingStore, 'persist');
       await engine.stop();
-      expect(deps.sessionManager.persist).toHaveBeenCalledOnce();
+      expect(deps.runtimeRegistry.persist).toHaveBeenCalledOnce();
+      expect(persistSpy).toHaveBeenCalledOnce();
       expect(deps.pipeline.dispose).toHaveBeenCalledOnce();
     });
   });
-
-  // -- handleChannelEvent -------------------------------------------------
 
   describe('handleChannelEvent', () => {
     it('resolves slash command and sends text response via senderFactory', async () => {
@@ -175,8 +162,10 @@ describe('Engine', () => {
       };
 
       const { factory, lastSender } = mockSenderFactory();
+      const bindingStore = new BindingStoreImpl();
       deps = createDeps({
         commandRegistry: mockCommandRegistry({ command: cmd, args: '' }),
+        bindingStore,
         senderFactory: factory,
       });
       engine = new EngineImpl(deps);
@@ -187,8 +176,10 @@ describe('Engine', () => {
       expect(factory).toHaveBeenCalledWith('chat-1', 'ch-1');
       expect(deps.commandRegistry.resolve).toHaveBeenCalledWith('/help');
       expect(cmd.execute).toHaveBeenCalledWith('', expect.objectContaining({
-        chatId: 'chat-1',
-        userId: 'user-1',
+        binding: bindingStore.getOrCreate('ch-1', 'chat-1', 'chat-1'),
+        runtimeRegistry: deps.runtimeRegistry,
+        bindingStore,
+        runtimeBridge: deps.runtimeBridge,
       }));
       expect(lastSender().sendText).toHaveBeenCalledWith('Help text', 'msg-evt-1');
     });
@@ -211,173 +202,77 @@ describe('Engine', () => {
       });
       engine = new EngineImpl(deps);
 
-      const event = textEvent('/status');
-      await engine.handleChannelEvent(event);
+      await engine.handleChannelEvent(textEvent('/status'));
 
       expect(lastSender().sendCard).toHaveBeenCalledWith(cardResult, 'msg-evt-1');
       expect(lastSender().sendText).not.toHaveBeenCalled();
     });
 
-    it('passes command args to execute', async () => {
-      const cmd: Command = {
-        name: 'agent',
-        description: 'Switch agent',
-        execute: vi.fn().mockResolvedValue('Switched'),
-      };
+    it('routes regular text to the resolved runtime', async () => {
+      const runtimeRouter = mockRuntimeRouter('runtime');
+      const runtimeBridge = mockRuntimeBridge();
+      const cardEngine = mockCardEngine();
+      const idleWatcher = { touch: vi.fn(), remove: vi.fn(), dispose: vi.fn() };
 
       deps = createDeps({
-        commandRegistry: mockCommandRegistry({ command: cmd, args: 'claude-acp' }),
+        runtimeRouter,
+        runtimeBridge,
+        cardEngine,
+        idleWatcher: idleWatcher as never,
       });
-      engine = new EngineImpl(deps);
-
-      const event = textEvent('/agent claude-acp');
-      await engine.handleChannelEvent(event);
-
-      expect(cmd.execute).toHaveBeenCalledWith('claude-acp', expect.anything());
-    });
-
-    it('does not call sessionManager or onPrompt when command resolves', async () => {
-      const cmd: Command = {
-        name: 'help',
-        description: 'Help',
-        execute: vi.fn().mockResolvedValue('ok'),
-      };
-      const onPrompt = vi.fn();
-
-      deps = createDeps({
-        commandRegistry: mockCommandRegistry({ command: cmd, args: '' }),
-        onPrompt,
-      });
-      engine = new EngineImpl(deps);
-
-      await engine.handleChannelEvent(textEvent('/help'));
-
-      expect(deps.sessionManager.getOrCreate).not.toHaveBeenCalled();
-      expect(onPrompt).not.toHaveBeenCalled();
-    });
-
-    it('falls through to "no session" message when slash command does not resolve', async () => {
-      const { factory, lastSender } = mockSenderFactory();
-      deps = createDeps({ senderFactory: factory });
-      engine = new EngineImpl(deps);
-
-      const event = textEvent('/unknown-cmd');
-      await engine.handleChannelEvent(event);
-
-      expect(deps.commandRegistry.resolve).toHaveBeenCalledWith('/unknown-cmd');
-      expect(deps.sessionManager.getOrCreate).not.toHaveBeenCalled();
-      expect(lastSender().sendText).toHaveBeenCalledWith(
-        expect.stringContaining('No sessions available'),
-        'msg-evt-1',
-      );
-    });
-
-    it('sends "no active session" when no existing session for regular text', async () => {
-      const { factory, lastSender } = mockSenderFactory();
-      deps = createDeps({ senderFactory: factory });
       engine = new EngineImpl(deps);
 
       const event = textEvent('Hello, AI!');
       await engine.handleChannelEvent(event);
 
-      expect(deps.commandRegistry.resolve).not.toHaveBeenCalled();
-      expect(deps.sessionManager.getOrCreate).not.toHaveBeenCalled();
-      expect(lastSender().sendText).toHaveBeenCalledWith(
-        expect.stringContaining('No sessions available'),
-        'msg-evt-1',
-      );
+      expect(runtimeRouter.resolveTarget).toHaveBeenCalledWith(event);
+      expect(cardEngine.setReplyTarget).toHaveBeenCalledWith('runtime-1', 'msg-evt-1');
+      expect(runtimeBridge.sendPrompt).toHaveBeenCalledWith('runtime-1', event);
+      expect(idleWatcher.touch).toHaveBeenCalledWith('runtime-1', 'chat-1');
     });
 
-    it('routes to existing session and calls onPrompt', async () => {
-      const onPrompt = vi.fn();
-      const session: SessionInfo = {
-        sessionId: 'session-chat-1',
-        chatId: 'chat-1',
-        channelId: 'feishu',
-        agentId: 'claude',
-        permissionMode: 'normal',
-        createdAt: Date.now(),
-        lastActiveAt: Date.now(),
-      };
-
-      deps = createDeps({ onPrompt });
-      (deps.sessionManager.get as ReturnType<typeof vi.fn>).mockReturnValue(session);
-      engine = new EngineImpl(deps);
-
-      const event = textEvent('Hello, AI!');
-      await engine.handleChannelEvent(event);
-
-      expect(deps.sessionManager.get).toHaveBeenCalledWith('chat-1', 'msg-evt-1');
-      expect(onPrompt).toHaveBeenCalledWith(session, event);
-    });
-
-    it('sends "no active session" with hint when beam sessions exist', async () => {
-      const { factory, lastSender } = mockSenderFactory();
-      deps = createDeps({ senderFactory: factory });
-      (deps.sessionManager.listActive as ReturnType<typeof vi.fn>).mockReturnValue([
-        { sessionId: 'beam-1', chatId: 'other' },
-      ]);
-      engine = new EngineImpl(deps);
-
-      const event = textEvent('Hello');
-      await engine.handleChannelEvent(event);
-
-      expect(lastSender().sendText).toHaveBeenCalledWith(
-        expect.stringContaining('No active session'),
-        'msg-evt-1',
-      );
-      expect(lastSender().sendText).toHaveBeenCalledWith(
-        expect.stringContaining('/attach'),
-        'msg-evt-1',
-      );
-    });
-
-    it('works without onPrompt callback when session exists', async () => {
-      const session: SessionInfo = {
-        sessionId: 'session-chat-1',
-        chatId: 'chat-1',
-        channelId: 'feishu',
-        agentId: 'claude',
-        permissionMode: 'normal',
-        createdAt: Date.now(),
-        lastActiveAt: Date.now(),
-      };
-      deps = createDeps({});
-      (deps.sessionManager.get as ReturnType<typeof vi.fn>).mockReturnValue(session);
-      engine = new EngineImpl(deps);
-
-      const event = textEvent('Hello');
-      await engine.handleChannelEvent(event);
-      // Should not throw
-    });
-
-    it('provides correct CommandContext with sender from senderFactory', async () => {
-      const cmd: Command = {
-        name: 'test',
-        description: 'Test',
-        execute: vi.fn().mockResolvedValue('ok'),
-      };
-
+    it('sends a no-runtime hint when routing cannot resolve a runtime', async () => {
       const { factory, lastSender } = mockSenderFactory();
       deps = createDeps({
-        commandRegistry: mockCommandRegistry({ command: cmd, args: '' }),
         senderFactory: factory,
+        runtimeRegistry: {
+          ...mockRuntimeRegistry(),
+          list: vi.fn().mockReturnValue([]),
+        } as unknown as RuntimeRegistryImpl,
       });
       engine = new EngineImpl(deps);
 
-      await engine.handleChannelEvent(textEvent('/test'));
+      await engine.handleChannelEvent(textEvent('Hello, AI!'));
 
-      expect(factory).toHaveBeenCalledWith('chat-1', 'ch-1');
-      const callArgs = (cmd.execute as ReturnType<typeof vi.fn>).mock.calls[0];
-      expect(callArgs[1].chatId).toBe('chat-1');
-      expect(callArgs[1].userId).toBe('user-1');
-      expect(callArgs[1].sessionManager).toBe(deps.sessionManager);
-      // sender should be the one returned by senderFactory
-      expect(callArgs[1].sender).toBe(lastSender());
+      expect(lastSender().sendText).toHaveBeenCalledWith(
+        expect.stringContaining('No runtime attached to this thread'),
+        'msg-evt-1',
+      );
+      expect(lastSender().sendText).toHaveBeenCalledWith(
+        expect.stringContaining('/new'),
+        'msg-evt-1',
+      );
+    });
+
+    it('surfaces runtime bridge errors back to the user', async () => {
+      const { factory, lastSender } = mockSenderFactory();
+      const runtimeBridge = {
+        ...mockRuntimeBridge(),
+        sendPrompt: vi.fn().mockRejectedValue(new Error('boom')),
+      } as unknown as RuntimeBridgeImpl;
+
+      deps = createDeps({
+        senderFactory: factory,
+        runtimeRouter: mockRuntimeRouter('runtime'),
+        runtimeBridge,
+      });
+      engine = new EngineImpl(deps);
+
+      await engine.handleChannelEvent(textEvent('Hello, AI!'));
+
+      expect(lastSender().sendText).toHaveBeenCalledWith('Error: boom');
     });
   });
-
-  // -- handleCardAction ----------------------------------------------------
 
   describe('handleCardAction', () => {
     it('delegates to permissionService.handleAction', async () => {
@@ -389,90 +284,12 @@ describe('Engine', () => {
         messageId: 'msg-card-1',
         chatId: 'chat-1',
         userId: 'user-1',
-        value: { v: 1, action: 'approve', sessionId: 'sess-1' },
+        value: { v: 1, action: 'approve', sessionId: 'runtime-1' },
       };
 
       await engine.handleCardAction(action);
 
       expect(permissionService.handleAction).toHaveBeenCalledWith(action);
-    });
-
-    it('delegates deny action to permissionService', async () => {
-      const permissionService = mockPermissionService();
-      deps = createDeps({ permissionService });
-      engine = new EngineImpl(deps);
-
-      const action: CardActionEvent = {
-        messageId: 'msg-card-2',
-        chatId: 'chat-1',
-        userId: 'user-1',
-        value: { v: 1, action: 'deny', sessionId: 'sess-2' },
-      };
-
-      await engine.handleCardAction(action);
-
-      expect(permissionService.handleAction).toHaveBeenCalledWith(action);
-    });
-
-    it('delegates abort action to permissionService', async () => {
-      const permissionService = mockPermissionService();
-      deps = createDeps({ permissionService });
-      engine = new EngineImpl(deps);
-
-      const action: CardActionEvent = {
-        messageId: 'msg-card-3',
-        chatId: 'chat-1',
-        userId: 'user-1',
-        value: { v: 1, action: 'abort', sessionId: 'sess-3' },
-      };
-
-      await engine.handleCardAction(action);
-
-      expect(permissionService.handleAction).toHaveBeenCalledWith(action);
-    });
-  });
-
-  // -- Integration-like scenarios ------------------------------------------
-
-  describe('full lifecycle', () => {
-    it('start -> handleChannelEvent (with session) -> stop', async () => {
-      const onPrompt = vi.fn();
-      const session: SessionInfo = {
-        sessionId: 'session-chat-1',
-        chatId: 'chat-1',
-        channelId: 'feishu',
-        agentId: 'claude',
-        permissionMode: 'normal',
-        createdAt: Date.now(),
-        lastActiveAt: Date.now(),
-      };
-
-      deps = createDeps({ onPrompt });
-      (deps.sessionManager.get as ReturnType<typeof vi.fn>).mockReturnValue(session);
-      engine = new EngineImpl(deps);
-
-      await engine.start();
-      expect(deps.sessionManager.restore).toHaveBeenCalledOnce();
-
-      await engine.handleChannelEvent(textEvent('Hello'));
-      expect(deps.sessionManager.get).toHaveBeenCalled();
-      expect(onPrompt).toHaveBeenCalled();
-
-      await engine.stop();
-      expect(deps.sessionManager.persist).toHaveBeenCalledOnce();
-      expect(deps.pipeline.dispose).toHaveBeenCalledOnce();
-    });
-
-    it('sends no-session message for multiple events without existing sessions', async () => {
-      const { factory, lastSender } = mockSenderFactory();
-      deps = createDeps({ senderFactory: factory });
-      engine = new EngineImpl(deps);
-
-      await engine.handleChannelEvent(textEvent('First message', { chatId: 'chat-a' }));
-      await engine.handleChannelEvent(textEvent('Second message', { chatId: 'chat-b' }));
-
-      expect(deps.sessionManager.getOrCreate).not.toHaveBeenCalled();
-      expect(factory).toHaveBeenCalledTimes(2);
     });
   });
 });

@@ -2,21 +2,28 @@ import type { Command, CommandContext } from '../CommandRegistry.js';
 
 export const ModelCommand: Command = {
   name: 'model',
-  description: 'Switch the AI model for the current session.',
+  description: 'Switch the AI model for the current runtime.',
   async execute(args: string, context: CommandContext): Promise<string> {
     const modelName = args.trim();
-    const session = context.sessionManager.get(context.chatId, context.threadKey);
+    const runtime = context.binding.activeRuntimeId
+      ? context.runtimeRegistry.get(context.binding.activeRuntimeId)
+      : undefined;
 
     if (!modelName) {
-      const current = session?.model ?? '(default)';
-      return `Current model: ${current}\nUsage: /model <model-name> — switch model`;
+      const current = runtime?.metadata.model ?? '(default)';
+      return `Current model: ${current}\nUsage: /model <model-name> - switch model`;
     }
 
-    if (!session) {
-      return 'No active session. Send a message first.';
+    if (!runtime) {
+      return 'No active runtime. Attach or create one first.';
     }
 
-    context.sessionManager.setModel(context.chatId, context.threadKey, modelName);
+    context.runtimeRegistry.update(runtime.id, {
+      metadata: {
+        ...runtime.metadata,
+        model: modelName,
+      },
+    });
     return `Model set to: ${modelName}`;
   },
 };

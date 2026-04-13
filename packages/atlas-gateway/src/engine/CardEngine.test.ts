@@ -22,7 +22,7 @@ import type {
   ExecApprovalRequestMessage,
   PatchApplyBeginMessage,
   PatchApplyEndMessage,
-} from 'atlas-agent';
+} from 'codelink-agent';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 

@@ -1,11 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PermissionService } from './PermissionService.js';
 import type { CardActionEvent } from './Engine.js';
 import type { PermissionPayloadValidatorImpl, PermissionActionPayload } from './PermissionCard.js';
 import type { CardEngineImpl } from './CardEngine.js';
-import type { AgentBridge } from './AgentBridge.js';
-
-// ── Helpers ─────────────────────────────────────────────────────────────────
+import type { RuntimeBridgeImpl } from '../runtime/RuntimeBridge.js';
 
 function makeValidator(overrides?: Partial<PermissionPayloadValidatorImpl>): PermissionPayloadValidatorImpl {
   return {
@@ -21,16 +19,15 @@ function makeCardEngine(): CardEngineImpl {
     handleMessage: vi.fn(),
     handlePermissionResponse: vi.fn(),
     getStreamingState: vi.fn(),
+    setReplyTarget: vi.fn(),
     dispose: vi.fn(),
   } as unknown as CardEngineImpl;
 }
 
-function makeBridge(): AgentBridge {
+function makeBridge(): Pick<RuntimeBridgeImpl, 'respondToPermission'> {
   return {
-    handlePrompt: vi.fn().mockResolvedValue(undefined),
     respondToPermission: vi.fn().mockResolvedValue(undefined),
-    dispose: vi.fn().mockResolvedValue(undefined),
-  } as unknown as AgentBridge;
+  };
 }
 
 function makeEvent(value: Record<string, unknown> = {}): CardActionEvent {
@@ -49,7 +46,7 @@ function makePayload(overrides?: Partial<PermissionActionPayload>): PermissionAc
     iat: Date.now(),
     exp: Date.now() + 300_000,
     action: 'approve',
-    sessionId: 'session-1',
+    sessionId: 'runtime-1',
     requestId: 'req-1',
     toolName: 'Bash',
     toolCallId: 'tc-1',
@@ -58,12 +55,10 @@ function makePayload(overrides?: Partial<PermissionActionPayload>): PermissionAc
   };
 }
 
-// ── Tests ───────────────────────────────────────────────────────────────────
-
 describe('PermissionService', () => {
   let validator: PermissionPayloadValidatorImpl;
   let cardEngine: CardEngineImpl;
-  let bridge: AgentBridge;
+  let bridge: Pick<RuntimeBridgeImpl, 'respondToPermission'>;
   let service: PermissionService;
 
   beforeEach(() => {
@@ -73,20 +68,15 @@ describe('PermissionService', () => {
     service = new PermissionService({ validator, cardEngine, bridge });
   });
 
-  it('approve → validates, updates card UI, notifies agent with approved=true', async () => {
+  it('approve validates, updates card UI, notifies runtime with approved=true', async () => {
     const payload = makePayload({ action: 'approve', requestId: 'req-approve' });
     vi.mocked(validator.validate).mockReturnValue({ ok: true, data: payload });
 
     const event = makeEvent({ someKey: 'someValue' });
     await service.handleAction(event);
 
-    // Validator called with event.value
     expect(validator.validate).toHaveBeenCalledWith(event.value);
-
-    // Card engine updated
     expect(cardEngine.handlePermissionResponse).toHaveBeenCalledWith(payload.sessionId, payload);
-
-    // Agent notified with approved=true and requestId (not nonce)
     expect(bridge.respondToPermission).toHaveBeenCalledWith(
       payload.sessionId,
       'req-approve',
@@ -94,7 +84,7 @@ describe('PermissionService', () => {
     );
   });
 
-  it('deny → notifies agent with approved=false', async () => {
+  it('deny notifies runtime with approved=false', async () => {
     const payload = makePayload({ action: 'deny', requestId: 'req-deny' });
     vi.mocked(validator.validate).mockReturnValue({ ok: true, data: payload });
 
@@ -108,7 +98,7 @@ describe('PermissionService', () => {
     );
   });
 
-  it('approve_scoped → notifies agent with approved=true', async () => {
+  it('approve_scoped notifies runtime with approved=true', async () => {
     const payload = makePayload({
       action: 'approve_scoped',
       requestId: 'req-scoped',
@@ -126,7 +116,7 @@ describe('PermissionService', () => {
     );
   });
 
-  it('abort → notifies agent with approved=false', async () => {
+  it('abort notifies runtime with approved=false', async () => {
     const payload = makePayload({ action: 'abort', requestId: 'req-abort' });
     vi.mocked(validator.validate).mockReturnValue({ ok: true, data: payload });
 
@@ -140,10 +130,8 @@ describe('PermissionService', () => {
     );
   });
 
-  it('invalid payload → ignores (no card update, no agent notification)', async () => {
+  it('invalid payload ignores the action', async () => {
     vi.mocked(validator.validate).mockReturnValue({ ok: false, error: 'bad payload' });
-
-    // Spy on console.error to verify logging
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     await service.handleAction(makeEvent({ garbage: true }));

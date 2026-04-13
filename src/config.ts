@@ -50,7 +50,7 @@ if (!existsSync(atlasEnvPath)) {
     copyFileSync(templateEnvPath, atlasEnvPath);
     console.log(`[bootstrap] Copied .env → ${atlasEnvPath}`);
   } else {
-    writeFileSync(atlasEnvPath, `# Feishu AI Assistant - Environment Variables\n# Edit this file and restart the server.\n\nFEISHU_APP_ID=\nFEISHU_APP_SECRET=\n# ANTHROPIC_API_KEY=\n`, "utf-8");
+    writeFileSync(atlasEnvPath, `# CodeLink - Environment Variables\n# Edit this file and restart the server.\n\nFEISHU_APP_ID=\nFEISHU_APP_SECRET=\n# ANTHROPIC_API_KEY=\n`, "utf-8");
     console.log(`[bootstrap] Created .env template → ${atlasEnvPath}`);
   }
 }

@@ -1,11 +1,13 @@
 {
-  "name": "atlas-cli",
+  "name": "codelink-cli",
   "version": "3.0.0",
   "private": true,
   "type": "module",
   "bin": {
+    "codelink": "dist/index.js",
     "atlas": "dist/index.js",
-    "beam": "dist/beam.js"
+    "codelink-runtime": "dist/runtime.js",
+    "atlas-runtime": "dist/runtime.js"
   },
   "scripts": {
     "build": "tsc",
@@ -13,8 +15,8 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "atlas-agent": "3.0.0",
-    "atlas-gateway": "3.0.0",
+    "codelink-agent": "3.0.0",
+    "codelink-gateway": "3.0.0",
     "dotenv": "^16.4.0",
     "express": "^4.21.2"
   },

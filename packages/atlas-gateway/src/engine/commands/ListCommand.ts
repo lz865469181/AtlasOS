@@ -12,71 +12,50 @@ function timeAgo(ts: number): string {
   return `${days}d ago`;
 }
 
-function truncate(text: string, maxLen: number): string {
-  if (text.length <= maxLen) return text;
-  return text.slice(0, maxLen) + '...';
-}
-
 export const ListCommand: Command = {
   name: 'list',
-  description: 'List all active sessions in this chat with recent messages.',
+  description: 'List thread bindings and known runtimes.',
   async execute(_args: string, context: CommandContext): Promise<string> {
-    if (!context.sessionManager.listByChatId) {
-      return 'List command not supported by this session manager.';
-    }
+    const allBindings = context.bindingStore.listByChat(
+      context.binding.channelId,
+      context.binding.chatId,
+    );
+    const runtimes = context.runtimeRegistry.list();
 
-    const sessions = context.sessionManager.listByChatId(context.chatId);
-    const allActive = context.sessionManager.listActive();
-    const beamSessions = allActive.filter(s => s.channelId === 'beam');
-
-    if (sessions.length === 0 && beamSessions.length === 0) {
-      return 'No active sessions.';
+    if (allBindings.length === 0 && runtimes.length === 0) {
+      return 'No active runtimes.';
     }
 
     const lines: string[] = [];
 
-    // Chat-specific sessions
-    if (sessions.length > 0) {
-      lines.push(`**Chat Sessions (${sessions.length})**\n`);
+    if (allBindings.length > 0) {
+      lines.push(`**Bindings (${allBindings.length})**\n`);
 
-      for (let i = 0; i < sessions.length; i++) {
-        const session = sessions[i];
-        const threadInfo = session.threadKey ? `thread:${session.threadKey.slice(0, 8)}` : 'main';
-        const active = timeAgo(session.lastActiveAt);
-
-        const shortId = session.sessionId.slice(0, 8);
-        lines.push(`${i + 1}. 🟢 **${session.agentId}** [${threadInfo}] \`${shortId}\` — ${active}`);
-
-        // Show last 4 chat entries (2 pairs)
-        const history = session.chatHistory;
-        if (history && history.length > 0) {
-          const recent = history.slice(-4);
-          for (const entry of recent) {
-            const icon = entry.role === 'user' ? '👤' : '🤖';
-            const text = truncate(entry.text, 60);
-            lines.push(`   ${icon} ${text}`);
-          }
-        } else if (session.lastPrompt) {
-          lines.push(`   👤 ${truncate(session.lastPrompt, 60)}`);
-        }
-
-        if (i < sessions.length - 1) {
+      for (let i = 0; i < allBindings.length; i++) {
+        const binding = allBindings[i];
+        const active = timeAgo(binding.lastActiveAt);
+        const threadInfo = binding.threadKey ? `thread:${binding.threadKey.slice(0, 8)}` : 'main';
+        const activeRuntime = binding.activeRuntimeId
+          ? context.runtimeRegistry.get(binding.activeRuntimeId)
+          : undefined;
+        const label = activeRuntime?.displayName ?? activeRuntime?.id.slice(0, 8) ?? '(none)';
+        const runtimeKind = activeRuntime ? ` [${activeRuntime.provider}/${activeRuntime.transport}]` : '';
+        lines.push(`${i + 1}. **${threadInfo}** active: ${label}${runtimeKind} - ${active}`);
+        if (i < allBindings.length - 1) {
           lines.push('');
         }
       }
     }
 
-    // Beam sessions
-    if (beamSessions.length > 0) {
+    if (runtimes.length > 0) {
       if (lines.length > 0) lines.push('');
-      lines.push(`**Beam Sessions (${beamSessions.length})**\n`);
+      lines.push(`**Runtimes (${runtimes.length})**\n`);
 
-      for (let i = 0; i < beamSessions.length; i++) {
-        const session = beamSessions[i];
-        const label = session.displayName ?? session.chatId.replace(/^beam:/, '');
-        const active = timeAgo(session.lastActiveAt);
-        const shortId = session.sessionId.slice(0, 8);
-        lines.push(`${i + 1}. 🔵 **${label}** [${session.agentId}] \`${shortId}\` — ${active}`);
+      for (let i = 0; i < runtimes.length; i++) {
+        const runtime = runtimes[i];
+        const label = runtime.displayName ?? runtime.id.slice(0, 8);
+        const active = timeAgo(runtime.lastActiveAt);
+        lines.push(`${i + 1}. **${label}** [${runtime.provider}/${runtime.transport}] \`${runtime.id.slice(0, 8)}\` - ${active}`);
       }
     }
 

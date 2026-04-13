@@ -1,45 +1,49 @@
 import express from 'express';
 import type { Server } from 'node:http';
-import { agentRegistry } from 'atlas-agent';
+import { randomUUID } from 'node:crypto';
+import { agentRegistry } from 'codelink-agent';
 import {
-  CardStateStoreImpl,
-  MessageCorrelationStoreImpl,
-  SessionManagerImpl,
-  CardRenderPipeline,
+  BindingStoreImpl,
   CardEngineImpl,
+  CardRenderPipeline,
+  CardStateStoreImpl,
+  CommandRegistryImpl,
+  DingTalkAdapter,
+  DingTalkCardRenderer,
+  DingTalkChannelSender,
+  DingTalkClientImpl,
+  TmuxRuntimeAdapter,
   EngineImpl,
-  ToolCardBuilderImpl,
+  FeishuAdapter,
+  FeishuCardRenderer,
+  FeishuChannelSender,
+  IdleWatcher,
+  MessageCorrelationStoreImpl,
+  ExternalRuntimeAdapter,
   PermissionCardBuilderImpl,
   PermissionPayloadValidatorImpl,
-  FeishuAdapter,
-  FeishuChannelSender,
-  FeishuCardRenderer,
-  DingTalkAdapter,
-  DingTalkChannelSender,
-  DingTalkCardRenderer,
-  DingTalkClientImpl,
-  AgentBridge,
   PermissionService,
-  CommandRegistryImpl,
+  RuntimeBridgeImpl,
+  RuntimeRegistryImpl,
+  RuntimeRouterImpl,
   SessionQueue,
-  IdleWatcher,
-  ThreadContextStoreImpl,
-} from 'atlas-gateway';
+  ToolCardBuilderImpl,
+  ManagedRuntimeAdapter,
+} from 'codelink-gateway';
 import type {
-  LarkClient,
-  ChannelAdapter,
-  SenderFactory,
-  CardActionEvent,
-  DingTalkClient,
   AtlasConfig,
-} from 'atlas-gateway';
+  CodeLinkConfig,
+  CardActionEvent,
+  ChannelAdapter,
+  DingTalkClient,
+  LarkClient,
+  RuntimeCapabilities,
+  RuntimeSession,
+  SenderFactory,
+} from 'codelink-gateway';
 
-export type { AtlasConfig };
+export type { AtlasConfig, CodeLinkConfig };
 
-/**
- * Legacy config shape — still accepted for backward compatibility.
- * Prefer AtlasConfig for new code.
- */
 export interface AppConfig {
   feishuAppId?: string;
   feishuAppSecret?: string;
@@ -55,29 +59,30 @@ export interface App {
   stop(): Promise<void>;
 }
 
-/**
- * Normalize AppConfig or AtlasConfig into a unified internal shape.
- */
-function normalizeConfig(config: AppConfig | AtlasConfig): {
+function normalizeConfig(config: AppConfig | CodeLinkConfig | AtlasConfig): {
   feishu?: { appId: string; appSecret: string; verificationToken?: string };
   dingtalk?: { appKey: string; appSecret: string; mode: 'stream' | 'webhook' };
   agentCwd: string;
   agentEnv?: Record<string, string>;
+  defaultAgent: string;
+  defaultModel?: string;
+  defaultPermissionMode: 'auto' | 'confirm' | 'deny';
   idleTimeoutMs: number;
 } {
-  // Detect AtlasConfig by checking for 'channels' key
   if ('channels' in config) {
-    const c = config as AtlasConfig;
+    const c = config as CodeLinkConfig;
     return {
       feishu: c.channels.feishu,
       dingtalk: c.channels.dingtalk,
       agentCwd: c.agent.cwd,
       agentEnv: c.agent.env,
+      defaultAgent: c.agent.defaultAgent,
+      defaultModel: c.agent.defaultModel,
+      defaultPermissionMode: c.agent.defaultPermissionMode,
       idleTimeoutMs: c.idleTimeoutMs,
     };
   }
 
-  // Legacy AppConfig
   const c = config as AppConfig;
   return {
     feishu: c.feishuAppId && c.feishuAppSecret
@@ -88,53 +93,62 @@ function normalizeConfig(config: AppConfig | AtlasConfig): {
       : undefined,
     agentCwd: c.agentCwd,
     agentEnv: c.agentEnv,
+    defaultAgent: 'claude',
+    defaultPermissionMode: 'auto',
     idleTimeoutMs: 10 * 60 * 1000,
   };
 }
 
-export function createApp(config: AppConfig | AtlasConfig): App {
+function defaultCapabilities(overrides?: Partial<RuntimeCapabilities>): RuntimeCapabilities {
+  return {
+    streaming: true,
+    permissionCards: true,
+    fileAccess: false,
+    imageInput: false,
+    terminalOutput: false,
+    patchEvents: false,
+    ...overrides,
+  };
+}
+
+export function createApp(config: AppConfig | CodeLinkConfig | AtlasConfig): App {
   const normalized = normalizeConfig(config);
 
-  // 1. Stores
   const cardStore = new CardStateStoreImpl();
   const correlationStore = new MessageCorrelationStoreImpl(cardStore);
-  const sessionManager = new SessionManagerImpl();
+  const runtimeRegistry = new RuntimeRegistryImpl();
+  const bindingStore = new BindingStoreImpl();
+  const runtimeRouter = new RuntimeRouterImpl({ bindingStore, runtimeRegistry });
 
-  // 2. Adapter registry — maps channelId → adapter
   const adapters = new Map<string, ChannelAdapter>();
-
-  // 3. Renderers
   const feishuRenderer = new FeishuCardRenderer();
   const dingtalkRenderer = new DingTalkCardRenderer();
 
-  // Clients created lazily inside start().
   let larkClient: LarkClient | null = null;
   let dingtalkClient: DingTalkClient | null = null;
   let httpServer: Server | null = null;
 
-  // 4. Channel-aware sender factory
   const senderFactory: SenderFactory = (chatId: string, channelIdHint?: string) => {
-    const session = sessionManager.get(chatId);
-    const channelId = session?.channelId ?? channelIdHint ?? 'feishu';
+    const channelId = channelIdHint
+      ?? bindingStore.list().find((binding) => binding.chatId === chatId)?.channelId
+      ?? runtimeRegistry.list().find((runtime) => runtime.metadata.lastChatId === chatId)?.metadata.lastChannelId
+      ?? 'feishu';
 
     switch (channelId) {
-      case 'dingtalk': {
+      case 'dingtalk':
         if (!dingtalkClient) {
-          throw new Error('Cannot create DingTalk sender — client not initialised');
+          throw new Error('Cannot create DingTalk sender - client not initialised');
         }
         return new DingTalkChannelSender(dingtalkClient, chatId, dingtalkRenderer);
-      }
       case 'feishu':
-      default: {
+      default:
         if (!larkClient) {
-          throw new Error('Cannot create Feishu sender — larkClient not initialised');
+          throw new Error('Cannot create Feishu sender - larkClient not initialised');
         }
         return new FeishuChannelSender(larkClient, chatId, feishuRenderer);
-      }
     }
   };
 
-  // 5. Card render pipeline
   const pipeline = new CardRenderPipeline(
     cardStore,
     feishuRenderer,
@@ -142,7 +156,6 @@ export function createApp(config: AppConfig | AtlasConfig): App {
     correlationStore,
   );
 
-  // 6. Card engine
   const cardEngine = new CardEngineImpl({
     cardStore,
     correlationStore,
@@ -150,47 +163,58 @@ export function createApp(config: AppConfig | AtlasConfig): App {
     permissionCardBuilder: new PermissionCardBuilderImpl(),
   });
 
-  // 7. Session queue + Agent bridge
   const queue = new SessionQueue();
-  const bridge = new AgentBridge({
+  const managedAdapter = new ManagedRuntimeAdapter({
     registry: agentRegistry,
     cardEngine,
     queue,
     agentOpts: { cwd: normalized.agentCwd, env: normalized.agentEnv },
-    sessionManager,
+    runtimeRegistry,
+  });
+  const externalAdapter = new ExternalRuntimeAdapter();
+  const tmuxAdapter = new TmuxRuntimeAdapter({
+    cardEngine,
+    runtimeRegistry,
   });
 
-  // 8. Permission service
+  const runtimeBridge = new RuntimeBridgeImpl({
+    runtimeRegistry,
+    adapters: {
+      resolve(runtime: RuntimeSession) {
+        if (runtime.transport === 'tmux') {
+          return tmuxAdapter;
+        }
+        if (runtime.source === 'external' || runtime.transport === 'bridge') {
+          return externalAdapter;
+        }
+        return managedAdapter;
+      },
+    },
+  });
+
   const permissionService = new PermissionService({
     validator: new PermissionPayloadValidatorImpl(),
     cardEngine,
-    bridge,
+    bridge: runtimeBridge,
   });
 
-  // 9. Command registry + thread context
   const commandRegistry = new CommandRegistryImpl();
-  const threadContextStore = new ThreadContextStoreImpl();
 
-  // 10. Idle watcher
   const idleWatcher = new IdleWatcher({
     timeoutMs: normalized.idleTimeoutMs,
-    onIdle: async (sessionId, chatId) => {
+    onIdle: async (runtimeId, chatId) => {
       try {
-        const sender = senderFactory(chatId);
-        const session = sessionManager.get(chatId);
+        const runtime = runtimeRegistry.get(runtimeId);
+        const sender = senderFactory(chatId, runtime?.metadata.lastChannelId);
         const minutes = Math.round(normalized.idleTimeoutMs / 60000);
 
-        if (session) {
-          const age = Math.round((Date.now() - session.createdAt) / 60000);
-          const preview = session.lastPrompt
-            ? session.lastPrompt.length > 60
-              ? session.lastPrompt.slice(0, 60) + '...'
-              : session.lastPrompt
-            : '(no message)';
+        if (runtime) {
+          const age = Math.round((Date.now() - runtime.createdAt) / 60000);
+          const preview = runtime.metadata.lastPromptPreview ?? '(no message)';
 
           await sender.sendCard({
             header: {
-              title: `Session Idle — ${minutes} min`,
+              title: `Runtime Idle - ${minutes} min`,
               icon: '\u{23F3}',
               status: 'waiting',
             },
@@ -198,43 +222,51 @@ export function createApp(config: AppConfig | AtlasConfig): App {
               {
                 type: 'fields',
                 fields: [
-                  { label: 'Agent', value: session.agentId, short: true },
-                  { label: 'Session Age', value: `${age} min`, short: true },
-                  { label: 'Last Message', value: preview },
+                  { label: 'Runtime', value: runtime.displayName ?? runtime.id.slice(0, 8), short: true },
+                  { label: 'Provider', value: runtime.provider, short: true },
+                  { label: 'Runtime Age', value: `${age} min`, short: true },
+                  { label: 'Last Prompt', value: preview },
                 ],
               },
               { type: 'divider' },
               {
                 type: 'markdown',
-                content: `Reply \`/attach ${sessionId.slice(0, 8)}\` to attach this session to your thread.`,
+                content: `Use \`/attach ${runtime.id.slice(0, 8)}\` to reconnect this thread to the runtime.`,
               },
             ],
           });
-        } else {
-          await sender.sendText(`Session idle for ${minutes} minutes.`);
+          return;
         }
+
+        await sender.sendText(`Runtime idle for ${minutes} minutes.`);
       } catch (err) {
         console.error(
-          JSON.stringify({ time: new Date().toISOString(), level: 'error', msg: 'IdleWatcher.onIdle notification failed', sessionId, chatId, error: String(err) }),
+          JSON.stringify({
+            time: new Date().toISOString(),
+            level: 'error',
+            msg: 'IdleWatcher.onIdle notification failed',
+            runtimeId,
+            chatId,
+            error: String(err),
+          }),
         );
       }
     },
   });
 
-  // 11. Engine
   const engine = new EngineImpl({
     cardStore,
     correlationStore,
     pipeline,
     cardEngine,
-    sessionManager,
+    runtimeRegistry,
+    bindingStore,
+    runtimeRouter,
+    runtimeBridge,
     commandRegistry,
     permissionService,
     senderFactory,
-    bridge,
     idleWatcher,
-    threadContextStore,
-    onPrompt: (session, event) => bridge.handlePrompt(session, event),
   });
 
   const messageHandler = (event: Parameters<typeof engine.handleChannelEvent>[0]) =>
@@ -242,10 +274,8 @@ export function createApp(config: AppConfig | AtlasConfig): App {
 
   return {
     async start() {
-      // Restore persisted sessions before adapters start accepting messages
       await engine.start();
 
-      // ── Feishu adapter ──────────────────────────────────────────────
       if (normalized.feishu) {
         const lark = await import('@larksuiteoapi/node-sdk' as string);
 
@@ -273,16 +303,14 @@ export function createApp(config: AppConfig | AtlasConfig): App {
             }
             return dispatcher as any;
           },
-          onCardAction: (event: CardActionEvent) =>
-            engine.handleCardAction(event),
+          onCardAction: (event: CardActionEvent) => engine.handleCardAction(event),
         });
 
         adapters.set('feishu', feishuAdapter);
         await feishuAdapter.start(messageHandler);
-        console.log('[atlas] Feishu adapter started');
+        console.log('[codelink] Feishu adapter started');
       }
 
-      // ── DingTalk adapter ────────────────────────────────────────────
       if (normalized.dingtalk) {
         const httpPost = async (url: string, body: unknown, headers?: Record<string, string>) => {
           const resp = await fetch(url, {
@@ -299,7 +327,6 @@ export function createApp(config: AppConfig | AtlasConfig): App {
           httpPost,
         );
 
-        // Provide streamClientFactory when stream mode is configured
         let streamClientFactory: ((appKey: string, appSecret: string) => { start(h: Record<string, (d: unknown) => Promise<unknown>>): Promise<void>; close(): void }) | undefined;
         if (normalized.dingtalk.mode === 'stream') {
           try {
@@ -307,7 +334,7 @@ export function createApp(config: AppConfig | AtlasConfig): App {
             streamClientFactory = (appKey: string, appSecret: string) =>
               new sdk.default({ clientId: appKey, clientSecret: appSecret });
           } catch {
-            console.warn('[atlas] dingtalk-stream package not installed — falling back to webhook mode. Install with: npm install dingtalk-stream');
+            console.warn('[codelink] dingtalk-stream package not installed - falling back to webhook mode. Install with: npm install dingtalk-stream');
           }
         }
 
@@ -319,16 +346,14 @@ export function createApp(config: AppConfig | AtlasConfig): App {
           },
           client: dingtalkClient,
           streamClientFactory,
-          onCardAction: (event: CardActionEvent) =>
-            engine.handleCardAction(event),
+          onCardAction: (event: CardActionEvent) => engine.handleCardAction(event),
         });
 
         adapters.set('dingtalk', dingtalkAdapter);
         await dingtalkAdapter.start(messageHandler);
-        console.log('[atlas] DingTalk adapter started');
+        console.log('[codelink] DingTalk adapter started');
       }
 
-      // ── Beam HTTP API ──────────────────────────────────────────────
       const apiApp = express();
       apiApp.use(express.json());
 
@@ -336,80 +361,141 @@ export function createApp(config: AppConfig | AtlasConfig): App {
         res.json({ ok: true });
       });
 
-      apiApp.post('/api/beam/register', (req, res) => {
-        const { name, sessionId, agentId } = req.body ?? {};
-        if (!name || !sessionId) {
-          res.status(400).json({ error: 'name and sessionId are required' });
-          return;
+      apiApp.post('/api/runtimes/register', async (req, res) => {
+        try {
+          const {
+            runtimeId,
+            source,
+            provider,
+            transport,
+            displayName,
+            workspaceId,
+            projectId,
+            resumeHandle,
+            capabilities,
+            metadata,
+          } = req.body ?? {};
+
+          if (!source || !provider || !transport || !displayName) {
+            res.status(400).json({ error: 'source, provider, transport, and displayName are required' });
+            return;
+          }
+
+          const now = Date.now();
+          const runtime: RuntimeSession = {
+            id: runtimeId ?? randomUUID(),
+            source,
+            provider,
+            transport,
+            status: 'idle',
+            displayName,
+            workspaceId,
+            projectId,
+            resumeHandle,
+            capabilities: defaultCapabilities(capabilities),
+            metadata: {
+              agentId: normalized.defaultAgent,
+              permissionMode: normalized.defaultPermissionMode,
+              ...(normalized.defaultModel ? { model: normalized.defaultModel } : {}),
+              ...(metadata ?? {}),
+            },
+            createdAt: now,
+            lastActiveAt: now,
+          };
+
+          await runtimeRegistry.registerExternal(runtime);
+          res.json({
+            ok: true,
+            runtime: {
+              id: runtime.id,
+              source: runtime.source,
+              provider: runtime.provider,
+              transport: runtime.transport,
+              displayName: runtime.displayName,
+            },
+          });
+        } catch (err) {
+          res.status(500).json({ error: String(err) });
         }
-        const chatId = `beam:${name}`;
-        const session = sessionManager.registerExternal({
-          sessionId,
-          chatId,
-          channelId: 'beam',
-          agentId: agentId ?? 'claude',
-          displayName: name,
-        });
-        res.json({ ok: true, session: { sessionId: session.sessionId, chatId: session.chatId, displayName: session.displayName } });
       });
 
-      apiApp.get('/api/beam/sessions', (_req, res) => {
-        const all = sessionManager.listActive();
-        const beamSessions = all
-          .filter(s => s.channelId === 'beam')
-          .map(s => ({
-            name: s.displayName ?? s.chatId.replace(/^beam:/, ''),
-            sessionId: s.sessionId,
-            agentId: s.agentId,
-            createdAt: s.createdAt,
-            lastActiveAt: s.lastActiveAt,
+      apiApp.get('/api/runtimes', (req, res) => {
+        const source = typeof req.query.source === 'string' ? req.query.source : undefined;
+        const runtimes = runtimeRegistry
+          .list()
+          .filter((runtime) => !source || runtime.source === source)
+          .map((runtime) => ({
+            id: runtime.id,
+            source: runtime.source,
+            provider: runtime.provider,
+            transport: runtime.transport,
+            displayName: runtime.displayName,
+            status: runtime.status,
+            createdAt: runtime.createdAt,
+            lastActiveAt: runtime.lastActiveAt,
+            workspaceId: runtime.workspaceId,
+            projectId: runtime.projectId,
+            resumeHandle: runtime.resumeHandle,
           }));
-        res.json(beamSessions);
+        res.json(runtimes);
       });
 
-      apiApp.delete('/api/beam/sessions/:name', (req, res) => {
-        const name = req.params.name;
-        const chatId = `beam:${name}`;
-        const all = sessionManager.listActive();
-        const matching = all.filter(s => s.channelId === 'beam' && s.chatId === chatId);
-        if (matching.length === 0) {
-          res.json({ ok: false, message: 'not found' });
-          return;
+      apiApp.delete('/api/runtimes/:runtimeId', async (req, res) => {
+        try {
+          const runtimeId = req.params.runtimeId;
+          const runtime = runtimeRegistry.get(runtimeId);
+          if (!runtime) {
+            res.json({ ok: false, message: 'not found' });
+            return;
+          }
+
+          await runtimeBridge.dispose(runtimeId);
+          runtimeRegistry.remove(runtimeId);
+          for (const binding of bindingStore.list()) {
+            if (binding.attachedRuntimeIds.includes(runtimeId)) {
+              bindingStore.detach(binding.bindingId, runtimeId);
+            }
+            if (binding.activeRuntimeId === runtimeId) {
+              bindingStore.setActive(binding.bindingId, null);
+            }
+          }
+
+          res.json({ ok: true });
+        } catch (err) {
+          res.status(500).json({ error: String(err) });
         }
-        for (const s of matching) {
-          sessionManager.removeBySessionId(s.sessionId);
-        }
-        res.json({ ok: true, removed: matching.length });
       });
 
-      apiApp.delete('/api/beam/by-id/:sessionId', (req, res) => {
-        const removed = sessionManager.removeBySessionId(req.params.sessionId);
-        res.json({ ok: removed });
-      });
-
-      const apiPort = parseInt(process.env.BEAM_API_PORT ?? '20263', 10);
+      const apiPort = parseInt(
+        process.env.CODELINK_RUNTIME_API_PORT
+          ?? process.env.ATLAS_RUNTIME_API_PORT
+          ?? '20263',
+        10,
+      );
       httpServer = apiApp.listen(apiPort, () => {
-        console.log(`[atlas] Beam API listening on port ${apiPort}`);
+        console.log(`[codelink] Runtime API listening on port ${apiPort}`);
       });
 
       const channels = Array.from(adapters.keys()).join(', ') || 'none';
-      console.log(`[atlas] Started — active channels: ${channels}`);
+      console.log(`[codelink] Started - active channels: ${channels}`);
     },
 
     async stop() {
-      console.log('[atlas] Shutting down...');
+      console.log('[codelink] Shutting down...');
       if (httpServer) {
         httpServer.close();
         httpServer = null;
       }
       for (const [id, adapter] of adapters) {
         await adapter.stop();
-        console.log(`[atlas] ${id} adapter stopped`);
+        console.log(`[codelink] ${id} adapter stopped`);
       }
-      await bridge.dispose();
+      for (const runtime of runtimeRegistry.list()) {
+        await runtimeBridge.dispose(runtime.id);
+      }
       queue.dispose();
       await engine.stop();
-      console.log('[atlas] Stopped');
+      console.log('[codelink] Stopped');
     },
   };
 }

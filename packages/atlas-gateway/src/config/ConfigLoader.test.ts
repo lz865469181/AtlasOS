@@ -28,6 +28,18 @@ describe('ConfigLoader.fromEnv', () => {
     expect(result.idleTimeoutMs).toBe(300000);
   });
 
+  it('prefers CODELINK_* env aliases over ATLAS_*', () => {
+    const env = {
+      CODELINK_LOG_LEVEL: 'debug',
+      ATLAS_LOG_LEVEL: 'warn',
+      CODELINK_IDLE_TIMEOUT: '120000',
+      ATLAS_IDLE_TIMEOUT: '300000',
+    };
+    const result = ConfigLoader.fromEnv(env);
+    expect(result.logLevel).toBe('debug');
+    expect(result.idleTimeoutMs).toBe(120000);
+  });
+
   it('skips empty values', () => {
     const env: Record<string, string | undefined> = { FEISHU_APP_ID: '', FEISHU_APP_SECRET: undefined };
     const result = ConfigLoader.fromEnv(env as Record<string, string>);
@@ -82,6 +94,19 @@ describe('ConfigLoader.load', () => {
   it('overrides take precedence over env', async () => {
     const origEnv = process.env;
     process.env = { ...origEnv, ATLAS_LOG_LEVEL: 'warn' };
+    try {
+      const config = await ConfigLoader.load({
+        overrides: { logLevel: 'error' },
+      });
+      expect(config.logLevel).toBe('error');
+    } finally {
+      process.env = origEnv;
+    }
+  });
+
+  it('loads CodeLink env aliases the same way as Atlas env aliases', async () => {
+    const origEnv = process.env;
+    process.env = { ...origEnv, CODELINK_LOG_LEVEL: 'warn' };
     try {
       const config = await ConfigLoader.load({
         overrides: { logLevel: 'error' },

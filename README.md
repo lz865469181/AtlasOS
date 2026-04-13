@@ -1,350 +1,146 @@
-# Feishu AI Assistant (Atlas AI)
+# CodeLink
 
-> Bridge Claude AI to Feishu/Lark and DingTalk as a team chatbot, with streaming responses, interactive permission cards, idle session notifications, and multi-channel support.
+`claude-codex-lark-bridge` bridges local Claude Code and Codex runtimes into Feishu/Lark and DingTalk with thread-aware routing, streaming cards, permission handling, and optional tmux-backed remote attach.
 
-[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-green)](https://nodejs.org/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)](https://www.typescriptlang.org/)
-[![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
+## Architecture
 
-## Features
+CodeLink uses a dual-layer model:
 
-- **Claude AI Backend** — Anthropic SDK with streaming (`client.messages.stream()`)
-- **Multi-Channel** — Feishu/Lark (WebSocket) + DingTalk (Stream/Webhook)
-- **Streaming Responses** — Real-time token streaming via interactive cards
-- **Interactive Permission Cards** — Tool calls require Allow / Deny approval
-- **Thread-Aware Sessions** — Isolated sessions per chat thread (Feishu topic replies create separate sessions)
-- **Chat History Tracking** — Lightweight ring buffer records recent user/assistant messages per session
-- **Idle Session Notifications** — Rich context (agent, last message, session age) when sessions go idle
-- **Slash Commands** — `/new`, `/cancel`, `/agent`, `/model`, `/mode`, `/status`, `/list`, `/takeover`, `/help`
-- **Session Queue** — Messages from the same chat serialized; different chats run concurrently
-- **Pluggable Agent Registry** — Register new AI backends with `agentRegistry.register(id, factory)`
+- `RuntimeSession` represents a real Claude or Codex runtime.
+- `ConversationBinding` maps a chat thread to one active runtime plus any attached alternatives.
 
-## Architecture (v2 Monorepo)
+That split lets `/new`, `/attach`, `/switch`, `/detach`, and `/sessions` behave cleanly without mixing transport state and chat state.
 
-```
+## Monorepo Layout
+
+```text
 packages/
-├── atlas-wire/        # Shared types and schemas (zod)
-├── atlas-agent/       # Agent abstraction + Claude backend
-│   └── backends/claude/  # Anthropic SDK integration
-├── atlas-gateway/     # Engine, sessions, channels, cards, commands
-├── atlas-app-logs/    # Structured logging
-└── atlas-cli/         # Entry point (wires everything together)
+|- atlas-wire/        # Directory name kept for compatibility, workspace package: codelink-wire
+|- atlas-agent/       # Agent abstraction and provider backends, workspace package: codelink-agent
+|- atlas-gateway/     # Engine, runtime bridge, commands, cards, workspace package: codelink-gateway
+|- atlas-app-logs/    # Structured log sink, workspace package: codelink-app-logs
+\- atlas-cli/         # Main entrypoint and runtime helper, workspace package: codelink-cli
 ```
 
-```
-                      ┌──────────────────────────────────────────┐
-                      │              Engine (gateway)             │
-                      │  ┌──────────┐  ┌──────────────────────┐  │
-Feishu ──WebSocket──► │  │ Command  │  │   SessionManager     │  │
-DingTalk ─Stream────► │  │ Registry │  │ (thread-aware keys)  │  │
-                      │  └──────────┘  │ + ChatHistory ring   │  │
-                      │                │ + IdleWatcher        │  │
-                      │                └──────────┬───────────┘  │
-                      │                           │              │
-                      │             ┌─────────────▼──────┐       │
-                      │             │   AgentBridge       │       │
-                      │             │   → AgentRegistry   │       │
-                      │             │   → ClaudeBackend   │       │
-                      │             └─────────────────────┘       │
-                      └──────────────────────────────────────────┘
-```
-
-**How it works:**
-
-1. Feishu/DingTalk message arrives via WebSocket/Stream
-2. `Engine.handleChannelEvent()` extracts text and computes `threadKey` (threadId or messageId)
-3. If text starts with `/`, `CommandRegistry` resolves and executes the command
-4. Otherwise, `SessionManager` creates/retrieves a session keyed by `chatId:threadKey`
-5. User message is recorded in the session's chat history ring buffer (max 10 entries)
-6. `AgentBridge` delegates to `ClaudeBackend` via `agentRegistry`
-7. `ClaudeBackend` calls Anthropic `messages.stream()` API
-8. Streaming tokens flow back through `CardRenderPipeline` → channel sender
-9. Assistant response is recorded in chat history
-10. `IdleWatcher` fires rich context notifications when sessions go idle
+The top-level `src/` tree is retired legacy scaffolding. The active implementation lives under `packages/*`.
 
 ## Quick Start
 
-See [INSTALL.md](./INSTALL.md) for detailed step-by-step instructions.
-
 ```bash
-# 1. Clone and install
-git clone https://github.com/lz865469181/AtlasOS.git feishu-ai-assistant
-cd feishu-ai-assistant
+git clone https://github.com/lz865469181/claude-codex-lark-bridge.git
+cd claude-codex-lark-bridge
 yarn install
-
-# 2. Configure
 cp .env.example .env
-# Edit .env with your credentials (see Configuration section below)
-
-# 3. Build and run
 yarn build
 yarn start
 ```
+
+Detailed setup is in `INSTALL.md`.
 
 ## Configuration
 
-### Option A: Environment Variables (`.env`)
+Primary config inputs:
 
-Create a `.env` file at the project root:
+- `.env`
+- `codelink.config.json`
+
+Compatibility inputs still supported:
+
+- `atlas.config.json`
+- `ATLAS_*` runtime env aliases
+
+Important environment variables:
+
+| Variable | Purpose |
+|---|---|
+| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | Feishu/Lark bot credentials |
+| `DINGTALK_APP_KEY` / `DINGTALK_APP_SECRET` | DingTalk bot credentials |
+| `DINGTALK_MODE` | `stream` or `webhook` |
+| `AGENT_CWD` | Working directory for CodeLink-managed runtimes |
+| `CODELINK_IDLE_TIMEOUT` / `ATLAS_IDLE_TIMEOUT` | Idle notification timeout in milliseconds |
+| `CODELINK_LOG_LEVEL` / `ATLAS_LOG_LEVEL` | Log level |
+| `CODELINK_RUNTIME_API_PORT` / `ATLAS_RUNTIME_API_PORT` | Runtime registration API port, default `20263` |
+| `CODELINK_RUNTIME_SERVER_URL` / `ATLAS_RUNTIME_SERVER_URL` | Runtime helper API base URL |
+| `CODELINK_RUNTIME_CWD` / `ATLAS_RUNTIME_CWD` | Working directory for tmux-launched external runtimes |
+| `CODELINK_RUNTIME_PROVIDER` / `ATLAS_RUNTIME_PROVIDER` | Default external runtime provider, `claude` or `codex` |
+| `CODELINK_TMUX_BIN` / `ATLAS_TMUX_BIN` / `TMUX_BIN` | tmux binary path override |
+| `CLAUDE_CLI_PATH` | Claude CLI path used by `codelink-runtime start` |
+| `CODEX_CLI_PATH` | Codex CLI path used by `codelink-runtime start` |
+
+Config precedence:
+
+```text
+codelink.config.json -> atlas.config.json -> .env -> runtime overrides
+```
+
+## Slash Commands
+
+| Command | Description |
+|---|---|
+| `/new` | Create a new runtime and switch this thread to it |
+| `/agent <id>` | Create a runtime from another backend/provider |
+| `/model <name>` | Set model metadata on the active runtime |
+| `/mode <mode>` | Set permission mode on the active runtime |
+| `/status` | Show runtime provider, transport, model, mode, uptime, and runtime ID |
+| `/list` | List thread bindings and known runtimes in the current chat |
+| `/attach <name|id>` | Attach an existing runtime to this thread |
+| `/switch <number|name|id>` | Switch to another attached runtime |
+| `/detach` | Detach the current runtime from this thread |
+| `/destroy <id|all>` | Destroy runtimes |
+| `/sessions` | List runtimes attached to this thread |
+| `/cancel` | Cancel the current runtime execution |
+| `/help` | Show command help |
+
+## tmux External Runtimes
+
+tmux is optional for the main service. Install it only if you want to bridge an already-running local Claude Code or Codex session into Feishu/DingTalk.
+
+Examples:
 
 ```bash
-# ── Required: Feishu/Lark bot credentials ──
-FEISHU_APP_ID=cli_xxxxxxxxxxxx
-FEISHU_APP_SECRET=your_app_secret_here
-
-# ── Required: Anthropic API key ──
-ANTHROPIC_API_KEY=sk-ant-api03-xxxxxxxxxxxx
-
-# ── Optional: DingTalk (if using DingTalk channel) ──
-DINGTALK_APP_KEY=your_dingtalk_app_key
-DINGTALK_APP_SECRET=your_dingtalk_app_secret
-DINGTALK_MODE=stream    # stream or webhook
-
-# ── Optional: Claude model configuration ──
-CLAUDE_MODEL=claude-sonnet-4-6          # default model
-CLAUDE_MAX_TOKENS=8192                    # max response tokens
-CLAUDE_SYSTEM_PROMPT=You are a helpful assistant.
-
-# ── Optional: Agent settings ──
-AGENT_CWD=.                               # working directory for agent
-ATLAS_IDLE_TIMEOUT=600000                  # idle notification timeout (ms, default 10min)
-ATLAS_LOG_LEVEL=info                       # debug | info | warn | error
+yarn runtime start my-task
+yarn runtime start --provider codex codex-task
+yarn runtime discover
+yarn runtime adopt existing-claude my-task
+yarn runtime adopt --provider codex codex-lab codex-task
+yarn runtime list
+yarn runtime drop my-task
 ```
 
-### Option B: Config File (`atlas.config.json`)
+Behavior:
 
-Create `atlas.config.json` at the project root for richer configuration:
+- `start` creates a new detached tmux session, launches the selected CLI inside it, registers that session as an external runtime, and prints both the local `tmux attach` command and the chat `/attach` command.
+- `discover` lists local tmux sessions that can be adopted.
+- `adopt` registers an existing tmux session without creating or killing it.
+- Feishu `/attach` and DingTalk `/attach` bind to that same tmux-backed runtime instead of shelling into `tmux attach`.
+- Re-adopting the same `provider + tmux session` reuses the existing runtime registration.
 
-```json
-{
-  "channels": {
-    "feishu": {
-      "appId": "cli_xxxxxxxxxxxx",
-      "appSecret": "your_app_secret_here"
-    },
-    "dingtalk": {
-      "appKey": "your_dingtalk_app_key",
-      "appSecret": "your_dingtalk_app_secret",
-      "mode": "stream"
-    }
-  },
-  "agent": {
-    "cwd": ".",
-    "env": {
-      "ANTHROPIC_API_KEY": "sk-ant-api03-xxxxxxxxxxxx",
-      "CLAUDE_MODEL": "claude-sonnet-4-6",
-      "CLAUDE_MAX_TOKENS": "8192",
-      "CLAUDE_SYSTEM_PROMPT": "You are a helpful assistant."
-    },
-    "defaultAgent": "claude",
-    "defaultPermissionMode": "auto"
-  },
-  "idleTimeoutMs": 600000,
-  "logLevel": "info"
-}
-```
-
-**Config resolution order:** `atlas.config.json` → `.env` → runtime overrides (later wins).
-
-### Environment Variable → Config Mapping
-
-| Environment Variable | Config Path | Description |
-|---------------------|-------------|-------------|
-| `FEISHU_APP_ID` | `channels.feishu.appId` | Feishu bot App ID |
-| `FEISHU_APP_SECRET` | `channels.feishu.appSecret` | Feishu bot App Secret |
-| `DINGTALK_APP_KEY` | `channels.dingtalk.appKey` | DingTalk App Key |
-| `DINGTALK_APP_SECRET` | `channels.dingtalk.appSecret` | DingTalk App Secret |
-| `DINGTALK_MODE` | `channels.dingtalk.mode` | `stream` or `webhook` |
-| `AGENT_CWD` | `agent.cwd` | Agent working directory |
-| `AGENT_DEFAULT_AGENT` | `agent.defaultAgent` | Default agent ID (default: `claude`) |
-| `AGENT_DEFAULT_MODEL` | `agent.defaultModel` | Default model override |
-| `AGENT_PERMISSION_MODE` | `agent.defaultPermissionMode` | `auto` / `confirm` / `deny` |
-| `ATLAS_IDLE_TIMEOUT` | `idleTimeoutMs` | Idle notification timeout in ms |
-| `ATLAS_LOG_LEVEL` | `logLevel` | Log level |
-
-### Claude Backend Environment Variables
-
-These are passed to the Claude backend via `agent.env`:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ANTHROPIC_API_KEY` | — | **Required.** Anthropic API key |
-| `CLAUDE_MODEL` | `claude-sonnet-4-6` | Model to use |
-| `CLAUDE_MAX_TOKENS` | `8192` | Max response tokens |
-| `CLAUDE_SYSTEM_PROMPT` | *(none)* | System prompt for all conversations |
-
-## Feishu App Setup
-
-1. Go to [Feishu Open Platform](https://open.feishu.cn/app) > Create Enterprise App
-2. **Add Bot capability**: App Features > Bot
-3. **Subscribe to events**: Event Subscriptions > Add `im.message.receive_v1`
-4. **Permissions**: grant `im:message`, `im:message:readonly`
-5. **Connection method**: Event Subscriptions > choose **WebSocket**
-6. **Publish** the app and approve it in your organization
-
-## Bot Commands
-
-| Command | Aliases | Description |
-|---------|---------|-------------|
-| `/new` | — | Create new session (clear context) |
-| `/cancel` | — | Cancel the current agent execution |
-| `/agent <id>` | `/a` | Switch agent backend (e.g., `/agent claude`) |
-| `/model <name>` | `/m` | Switch AI model |
-| `/mode <mode>` | — | Set permission mode (`auto` / `confirm` / `deny`) |
-| `/status` | `/s` | Show current session info (agent, model, mode, age) |
-| `/list` | `/l` | List all sessions in this chat with recent chat history |
-| `/takeover <id>` | — | Take over an idle session by session ID |
-| `/help` | `/h`, `/?` | List available commands |
-
-Commands support **prefix matching** — e.g., `/li` resolves to `/list`, `/ag` to `/agent`.
+The standalone helper binary is `codelink-runtime`. `atlas-runtime` remains available as a compatibility alias.
 
 ## Development
 
-### Monorepo Commands
-
 ```bash
-# Install all workspace dependencies
 yarn install
-
-# Build all packages (dependency-ordered)
 yarn build
-
-# Run all tests
 yarn test
-
-# Dev mode (atlas-gateway with hot reload)
 yarn dev
-
-# Start the service
 yarn start
-
-# Build/test individual packages
-yarn workspace atlas-agent build
-yarn workspace atlas-agent test
-yarn workspace atlas-gateway test
+yarn runtime --help
 ```
 
-### Package Overview
-
-| Package | Description |
-|---------|-------------|
-| `atlas-wire` | Shared types, zod schemas |
-| `atlas-agent` | `AgentBackend` interface + `ClaudeBackend` implementation |
-| `atlas-gateway` | Engine, channels (Feishu/DingTalk), cards, sessions, commands |
-| `atlas-app-logs` | Structured JSON logging |
-| `atlas-cli` | Entry point — wires agent + gateway + config, starts the service |
-
-### Adding a New Agent Backend
-
-1. Create `packages/atlas-agent/src/backends/myagent/MyAgentBackend.ts` implementing `AgentBackend`
-2. Create `packages/atlas-agent/src/backends/myagent/index.ts`:
-   ```typescript
-   import { agentRegistry } from '../../core/AgentRegistry.js';
-   import { MyAgentBackend } from './MyAgentBackend.js';
-   agentRegistry.register('myagent', (opts) => new MyAgentBackend(opts));
-   ```
-3. Import in `packages/atlas-agent/src/backends/index.ts`:
-   ```typescript
-   import './claude/index.js';
-   import './myagent/index.js';  // add this
-   ```
-4. The new backend auto-registers on import — use it by setting `defaultAgent: "myagent"` in config
-
-### Key Interfaces
-
-```typescript
-// AgentBackend — implement this for new AI providers
-interface AgentBackend {
-  startSession(): Promise<{ sessionId: string }>;
-  sendPrompt(sessionId: string, prompt: string): Promise<void>;
-  cancel(sessionId: string): Promise<void>;
-  onMessage(handler: (msg: AgentMessage) => void): void;
-  offMessage?(handler: (msg: AgentMessage) => void): void;
-  dispose(): Promise<void>;
-}
-
-// AgentMessage — emitted during streaming
-type AgentMessage =
-  | { type: 'model-output'; textDelta?: string; fullText?: string }
-  | { type: 'status'; status: 'starting' | 'running' | 'idle' | 'stopped' | 'error'; detail?: string }
-  | { type: 'tool-use'; toolName: string; input: unknown }
-  | { type: 'permission-request'; ... }
-  | { type: 'result'; text: string };
-```
-
-## Testing
+Package-scoped examples:
 
 ```bash
-# All packages
+yarn workspace codelink-agent test
+yarn workspace codelink-gateway test
+yarn workspace codelink-cli test
+```
+
+## Verification
+
+Primary verification commands:
+
+```bash
 yarn test
-
-# Specific package
-yarn workspace atlas-agent test
-yarn workspace atlas-gateway test
-
-# Watch mode (in a package directory)
-cd packages/atlas-gateway && npx vitest --watch
+yarn build
 ```
-
-Test coverage: 541+ tests across gateway, 9+ tests for Claude backend.
-
-## Session Chat History
-
-Each session maintains a lightweight chat history (ring buffer, max 10 entries, text truncated to 100 chars). This powers the `/list` command:
-
-```
-Sessions (2)
-
-1. 🟢 claude [thread:abc12345] — 5m ago
-   👤 帮我修复登录bug
-   🤖 已修复，问题在于token过期未刷新...
-
-2. 🟢 claude [main] — 2h ago
-   👤 重构用户模块
-   🤖 已完成，拆分为3个子模块...
-```
-
-Chat history is recorded automatically for both user messages and assistant responses, and persisted across restarts.
-
-## Idle Session Notifications
-
-When a session is idle for the configured timeout (default 10 minutes), the bot sends a rich notification card with agent name, session age, and last message preview. Use `/takeover <sessionId>` to resume.
-
-Configure the timeout via `ATLAS_IDLE_TIMEOUT` (ms) or `idleTimeoutMs` in `atlas.config.json`.
-
-## Claude Code Hook → Feishu
-
-Send Claude Code events to Feishu in real time. Two hooks included:
-
-- **`hooks/notify-feishu.mjs`** — Notifies on every event
-- **`hooks/notify-feishu-filtered.mjs`** — Only code-changing tools (`Bash`, `Write`, `Edit`) + Stop/Error
-
-Quick setup:
-
-```bash
-# Set env vars
-export FEISHU_APP_ID=cli_xxxxxxxxxxxx
-export FEISHU_APP_SECRET=your_secret
-export FEISHU_NOTIFY_CHAT=oc_xxxxxxxxxxxx
-```
-
-Add to `~/.claude/settings.json`:
-
-```json
-{
-  "hooks": {
-    "PostToolUse": [
-      {
-        "type": "command",
-        "command": "node /path/to/feishu-ai-assistant/hooks/notify-feishu-filtered.mjs"
-      }
-    ]
-  }
-}
-```
-
-See [INSTALL.md](./INSTALL.md#claude-code-hook--feishu-notifications) for full documentation.
-
-## License
-
-MIT

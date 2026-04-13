@@ -28,7 +28,7 @@ export function startLogServer(port: number = 8787): ReturnType<typeof createSer
   });
 
   server.listen(port, () => {
-    console.log(`atlas-app-logs listening on port ${port}`);
+    console.log(`codelink-app-logs listening on port ${port}`);
   });
 
   return server;
