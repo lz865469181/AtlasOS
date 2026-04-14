@@ -624,6 +624,32 @@ describe('CommandRegistry', () => {
       expect(output).toContain('Watching: **lab** [claude/tmux]');
     });
 
+    it('/sessions shows unread watch state when available', async () => {
+      const ctx = await makeContext({
+        runtimes: [
+          makeRuntime({ id: 'runtime-a', displayName: 'main' }),
+          makeRuntime({
+            id: 'runtime-b',
+            displayName: 'lab',
+            status: 'running',
+          }),
+        ],
+        activeRuntimeId: 'runtime-a',
+        watchRuntimeId: 'runtime-b',
+      });
+      ctx.binding.watchState['runtime-b'] = {
+        unreadCount: 2,
+        lastStatus: 'running',
+        lastSummary: 'npm test failed',
+      };
+
+      const result = registry.resolve('/sessions');
+      const output = await result!.command.execute('', ctx);
+
+      expect(output).toContain('unread 2');
+      expect(output).toContain('npm test failed');
+    });
+
     it('/watch marks a non-active runtime as watching', async () => {
       const ctx = await makeContext({
         runtimes: [

@@ -1,6 +1,7 @@
 import type { ChannelEvent } from '../channel/channelEvent.js';
 import type { ChannelSender, SenderFactory } from '../channel/ChannelSender.js';
 import type { CardModel } from '../cards/CardModel.js';
+import type { AgentMessage } from 'codelink-agent';
 import type { BindingStoreImpl } from '../runtime/BindingStore.js';
 import type { RuntimeBridgeImpl } from '../runtime/RuntimeBridge.js';
 import type { RuntimeSession } from '../runtime/RuntimeModels.js';
@@ -43,6 +44,7 @@ export interface Engine {
   stop(): Promise<void>;
   handleChannelEvent(event: ChannelEvent): Promise<void>;
   handleCardAction(event: CardActionEvent): Promise<void>;
+  handleRuntimeMessage(runtimeId: string, message: AgentMessage): Promise<void>;
 }
 
 export class EngineImpl implements Engine {
@@ -160,10 +162,94 @@ export class EngineImpl implements Engine {
     await this.permissionService.handleAction(event);
   }
 
+  async handleRuntimeMessage(runtimeId: string, message: AgentMessage): Promise<void> {
+    const bindings = this.bindingStore.list().filter((binding) => binding.watchRuntimeId === runtimeId);
+
+    for (const binding of bindings) {
+      const state = binding.watchState[runtimeId] ?? { unreadCount: 0 };
+      const previousStatus = state.lastStatus;
+      const summary = this.summaryForMessage(message);
+      const notification = this.notificationForWatchedMessage(runtimeId, message, previousStatus);
+
+      if (summary) {
+        state.lastSummary = summary;
+        state.unreadCount += 1;
+      }
+
+      if (message.type === 'status') {
+        state.lastStatus = message.status;
+      }
+
+      binding.watchState[runtimeId] = state;
+      binding.lastActiveAt = Date.now();
+
+      const sender = this.senderFactory(binding.chatId, binding.channelId);
+      if (notification) {
+        await sender.sendText(notification, undefined);
+      }
+    }
+  }
+
   private touchBinding(bindingId: string): void {
     const binding = this.bindingStore.get(bindingId);
     if (binding) {
       binding.lastActiveAt = Date.now();
     }
+  }
+
+  private summaryForMessage(message: AgentMessage): string | null {
+    switch (message.type) {
+      case 'model-output':
+        return this.compactSummary(message.fullText ?? message.textDelta ?? '');
+      case 'terminal-output':
+        return this.compactSummary(message.data);
+      case 'permission-request':
+        return this.compactSummary(message.reason);
+      case 'exec-approval-request':
+        return 'Execution approval required';
+      case 'status':
+        return message.status === 'running' ? null : this.compactSummary(message.detail ?? message.status);
+      default:
+        return null;
+    }
+  }
+
+  private notificationForWatchedMessage(
+    runtimeId: string,
+    message: AgentMessage,
+    previousStatus?: RuntimeSession['status'],
+  ): string | null {
+    const runtime = this.runtimeRegistry.get(runtimeId);
+    const label = runtime?.displayName ?? runtimeId.slice(0, 8);
+
+    if (message.type === 'permission-request' || message.type === 'exec-approval-request') {
+      return `The watching runtime **${label}** needs approval. Use /focus ${label} to take over.`;
+    }
+
+    if (message.type === 'status') {
+      if (message.status === 'idle' && previousStatus === 'running') {
+        return `The watching runtime **${label}** completed and is now idle.`;
+      }
+      if (message.status === 'error') {
+        const detail = message.detail ? ` ${message.detail}` : '';
+        return `The watching runtime **${label}** entered error state.${detail}`;
+      }
+    }
+
+    return null;
+  }
+
+  private compactSummary(text: string): string | null {
+    const line = text
+      .split(/\r?\n/)
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .at(-1);
+
+    if (!line) {
+      return null;
+    }
+
+    return line.length > 120 ? `${line.slice(0, 117)}...` : line;
   }
 }

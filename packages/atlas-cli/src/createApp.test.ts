@@ -201,8 +201,6 @@ describe('createApp', () => {
 
   it('registers inbox and event ingestion routes for external runtimes', async () => {
     const app = createApp({
-      feishuAppId: 'test-id',
-      feishuAppSecret: 'test-secret',
       agentCwd: '/tmp',
     });
 
@@ -219,8 +217,6 @@ describe('createApp', () => {
 
   it('returns 404 when polling inbox for an unknown runtime', async () => {
     const app = createApp({
-      feishuAppId: 'test-id',
-      feishuAppSecret: 'test-secret',
       agentCwd: '/tmp',
     });
 
@@ -239,8 +235,6 @@ describe('createApp', () => {
 
   it('rejects empty event ingestion payloads for a known runtime', async () => {
     const app = createApp({
-      feishuAppId: 'test-id',
-      feishuAppSecret: 'test-secret',
       agentCwd: '/tmp',
     });
 

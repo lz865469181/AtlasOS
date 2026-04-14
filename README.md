@@ -12,6 +12,7 @@ CodeLink uses a dual-layer model:
 That split lets `/new`, `/attach`, `/switch`, `/detach`, and `/sessions` behave cleanly without mixing transport state and chat state.
 
 Each thread now supports one primary interactive runtime plus one secondary watching runtime. The active runtime receives normal prompts and detailed output; the watching runtime is meant for status checks, completion awareness, and on-demand promotion back to active.
+Watching runtimes accumulate unread summaries and emit lightweight reminders for completion, error, and approval-needed events instead of streaming full output into the thread.
 
 ## Monorepo Layout
 

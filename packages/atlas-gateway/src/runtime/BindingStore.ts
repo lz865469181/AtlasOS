@@ -64,6 +64,12 @@ export class BindingStoreImpl {
     if (runtimeId && binding.watchRuntimeId === runtimeId) {
       binding.watchRuntimeId = null;
     }
+    if (runtimeId && binding.watchState[runtimeId]) {
+      binding.watchState[runtimeId] = {
+        ...binding.watchState[runtimeId],
+        unreadCount: 0,
+      };
+    }
     binding.lastActiveAt = Date.now();
   }
 
@@ -76,7 +82,10 @@ export class BindingStoreImpl {
       : null;
 
     if (binding.watchRuntimeId) {
-      binding.watchState[binding.watchRuntimeId] ??= { unreadCount: 0 };
+      binding.watchState[binding.watchRuntimeId] = {
+        ...binding.watchState[binding.watchRuntimeId],
+        unreadCount: 0,
+      };
     }
 
     binding.lastActiveAt = Date.now();

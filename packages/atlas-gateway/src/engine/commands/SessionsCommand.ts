@@ -27,7 +27,14 @@ export const SessionsCommand: Command = {
 
     if (watchRuntime) {
       const label = watchRuntime.displayName ?? watchRuntime.id.slice(0, 8);
-      lines.push(`Watching: **${label}** [${watchRuntime.provider}/${watchRuntime.transport}]`);
+      const watchState = context.binding.watchState[watchRuntime.id];
+      const details = [
+        watchState?.unreadCount ? `unread ${watchState.unreadCount}` : null,
+        watchState?.lastStatus ?? null,
+        watchState?.lastSummary ?? null,
+      ].filter((item): item is string => Boolean(item));
+      const suffix = details.length > 0 ? ` - ${details.join(' - ')}` : '';
+      lines.push(`Watching: **${label}** [${watchRuntime.provider}/${watchRuntime.transport}]${suffix}`);
     }
 
     const secondaryRuntimeIds = context.binding.attachedRuntimeIds.filter(

@@ -2,6 +2,7 @@ import express from 'express';
 import type { Server } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { agentRegistry } from 'codelink-agent';
+import type { AgentMessage } from 'codelink-agent';
 import {
   BindingStoreImpl,
   CardEngineImpl,
@@ -273,6 +274,15 @@ export function createApp(config: AppConfig | CodeLinkConfig | AtlasConfig): App
     defaultPermissionMode: normalized.defaultPermissionMode,
     idleWatcher,
   });
+
+  const runtimeMessageHandler = (runtimeId: string, message: AgentMessage) => {
+    void engine.handleRuntimeMessage(runtimeId, message).catch((err) => {
+      console.error('[codelink] runtime watch notification failed', err);
+    });
+  };
+  managedAdapter.onMessage(runtimeMessageHandler);
+  externalAdapter.onMessage(runtimeMessageHandler);
+  tmuxAdapter.onMessage(runtimeMessageHandler);
 
   const messageHandler = (event: Parameters<typeof engine.handleChannelEvent>[0]) =>
     engine.handleChannelEvent(event);

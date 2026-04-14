@@ -14,6 +14,7 @@ import { BindingStoreImpl } from '../runtime/BindingStore.js';
 import type { RuntimeRouterImpl } from '../runtime/RuntimeRouter.js';
 import type { RuntimeBridgeImpl } from '../runtime/RuntimeBridge.js';
 import type { RuntimeRegistryImpl } from '../runtime/RuntimeRegistry.js';
+import type { AgentMessage } from 'codelink-agent';
 
 function mockSender(): ChannelSender {
   return {
@@ -290,6 +291,98 @@ describe('Engine', () => {
       await engine.handleCardAction(action);
 
       expect(permissionService.handleAction).toHaveBeenCalledWith(action);
+    });
+  });
+
+  describe('handleRuntimeMessage', () => {
+    it('accumulates unread summary for the watching runtime without sending a notification for normal output', async () => {
+      const { factory, lastSender } = mockSenderFactory();
+      const bindingStore = new BindingStoreImpl();
+      const binding = bindingStore.getOrCreate('ch-1', 'chat-1', 'chat-1');
+      bindingStore.attach(binding.bindingId, 'runtime-watch-1');
+      bindingStore.setWatching(binding.bindingId, 'runtime-watch-1');
+
+      deps = createDeps({
+        bindingStore,
+        senderFactory: factory,
+      });
+      engine = new EngineImpl(deps);
+
+      await engine.handleRuntimeMessage('runtime-watch-1', {
+        type: 'terminal-output',
+        data: 'line 1\nline 2',
+      });
+
+      expect(binding.watchState['runtime-watch-1']).toMatchObject({
+        unreadCount: 1,
+        lastSummary: 'line 2',
+      });
+      expect(lastSender().sendText).not.toHaveBeenCalled();
+    });
+
+    it('notifies the thread when a watching runtime completes', async () => {
+      const { factory, lastSender } = mockSenderFactory();
+      const bindingStore = new BindingStoreImpl();
+      const binding = bindingStore.getOrCreate('ch-1', 'chat-1', 'chat-1');
+      bindingStore.attach(binding.bindingId, 'runtime-watch-1');
+      bindingStore.setWatching(binding.bindingId, 'runtime-watch-1');
+
+      deps = createDeps({
+        bindingStore,
+        senderFactory: factory,
+      });
+      engine = new EngineImpl(deps);
+
+      await engine.handleRuntimeMessage('runtime-watch-1', {
+        type: 'status',
+        status: 'running',
+      });
+      await engine.handleRuntimeMessage('runtime-watch-1', {
+        type: 'status',
+        status: 'idle',
+      });
+
+      expect(binding.watchState['runtime-watch-1']).toMatchObject({
+        lastStatus: 'idle',
+      });
+      expect(lastSender().sendText).toHaveBeenCalledWith(
+        expect.stringContaining('watching runtime'),
+        undefined,
+      );
+      expect(lastSender().sendText).toHaveBeenCalledWith(
+        expect.stringContaining('completed'),
+        undefined,
+      );
+    });
+
+    it('notifies the thread when a watching runtime needs approval', async () => {
+      const { factory, lastSender } = mockSenderFactory();
+      const bindingStore = new BindingStoreImpl();
+      const binding = bindingStore.getOrCreate('ch-1', 'chat-1', 'chat-1');
+      bindingStore.attach(binding.bindingId, 'runtime-watch-1');
+      bindingStore.setWatching(binding.bindingId, 'runtime-watch-1');
+
+      deps = createDeps({
+        bindingStore,
+        senderFactory: factory,
+      });
+      engine = new EngineImpl(deps);
+
+      await engine.handleRuntimeMessage('runtime-watch-1', {
+        type: 'permission-request',
+        id: 'perm-1',
+        reason: 'Allow npm install?',
+        payload: {},
+      } satisfies AgentMessage);
+
+      expect(binding.watchState['runtime-watch-1']).toMatchObject({
+        unreadCount: 1,
+        lastSummary: 'Allow npm install?',
+      });
+      expect(lastSender().sendText).toHaveBeenCalledWith(
+        expect.stringContaining('needs approval'),
+        undefined,
+      );
     });
   });
 });
