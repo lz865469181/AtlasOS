@@ -16,6 +16,8 @@ import type { PermissionService } from './PermissionService.js';
 import type { IdleWatcher } from './IdleWatcher.js';
 import { buildWatchNotificationCard, parseWatchControlPayload } from './WatchControl.js';
 
+const WATCH_OUTPUT_PREVIEW_LIMIT = 4000;
+
 export interface CardActionEvent {
   messageId: string;
   chatId: string;
@@ -176,10 +178,15 @@ export class EngineImpl implements Engine {
       const state = binding.watchState[runtimeId] ?? { unreadCount: 0 };
       const previousStatus = state.lastStatus;
       const summary = this.summaryForMessage(message);
+      const outputPreview = this.outputPreviewForMessage(message);
 
       if (summary) {
         state.lastSummary = summary;
         state.unreadCount += 1;
+      }
+
+      if (outputPreview) {
+        state.lastOutputPreview = this.appendOutputPreview(state.lastOutputPreview, outputPreview);
       }
 
       if (message.type === 'status') {
@@ -225,12 +232,16 @@ export class EngineImpl implements Engine {
     }
 
     if (payload.action === 'show-latest-output') {
-      const sender = this.senderFactory(event.chatId);
+      const sender = this.senderFactory(event.chatId, binding.channelId);
       const runtime = this.runtimeRegistry.get(payload.runtimeId);
       const runtimeLabel = runtime?.displayName ?? payload.runtimeId.slice(0, 8);
       const watchState = binding.watchState[payload.runtimeId];
-      const summary = watchState?.lastSummary ?? 'No captured output yet.';
-      return sender.sendText(`Latest output from **${runtimeLabel}**:\n${summary}`, undefined).then(() => undefined);
+      const output = watchState?.lastOutputPreview?.trim() || watchState?.lastSummary || 'No captured output yet.';
+      const sanitized = output.replace(/```/g, "'''");
+      return sender.sendMarkdown(
+        `### Latest Output: ${runtimeLabel}\n\`\`\`text\n${sanitized}\n\`\`\``,
+        undefined,
+      ).then(() => undefined);
     }
 
     if (binding.watchRuntimeId === payload.runtimeId) {
@@ -257,6 +268,17 @@ export class EngineImpl implements Engine {
         return 'Execution approval required';
       case 'status':
         return message.status === 'running' ? null : this.compactSummary(message.detail ?? message.status);
+      default:
+        return null;
+    }
+  }
+
+  private outputPreviewForMessage(message: AgentMessage): string | null {
+    switch (message.type) {
+      case 'terminal-output':
+        return message.data;
+      case 'model-output':
+        return message.fullText ?? message.textDelta ?? '';
       default:
         return null;
     }
@@ -329,5 +351,14 @@ export class EngineImpl implements Engine {
     }
 
     return line.length > 120 ? `${line.slice(0, 117)}...` : line;
+  }
+
+  private appendOutputPreview(existing: string | undefined, nextChunk: string): string {
+    const combined = `${existing ?? ''}${nextChunk}`;
+    if (combined.length <= WATCH_OUTPUT_PREVIEW_LIMIT) {
+      return combined;
+    }
+
+    return combined.slice(-WATCH_OUTPUT_PREVIEW_LIMIT);
   }
 }

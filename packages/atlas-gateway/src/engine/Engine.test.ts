@@ -316,6 +316,7 @@ describe('Engine', () => {
       expect(binding.watchState['runtime-watch-1']).toMatchObject({
         unreadCount: 1,
         lastSummary: 'line 2',
+        lastOutputPreview: 'line 1\nline 2',
       });
       expect(lastSender().sendText).not.toHaveBeenCalled();
     });
@@ -484,7 +485,7 @@ describe('Engine', () => {
       expect(permissionService.handleAction).not.toHaveBeenCalled();
     });
 
-    it('show-latest-output action replies with the latest watching summary', async () => {
+    it('show-latest-output action replies with the latest output preview', async () => {
       const { factory, lastSender } = mockSenderFactory();
       const bindingStore = new BindingStoreImpl();
       const binding = bindingStore.getOrCreate('ch-1', 'chat-1', 'chat-1');
@@ -493,6 +494,7 @@ describe('Engine', () => {
       binding.watchState['runtime-watch'] = {
         unreadCount: 2,
         lastSummary: 'build finished successfully',
+        lastOutputPreview: 'step 1\nstep 2\nstep 3',
       };
 
       const permissionService = mockPermissionService();
@@ -525,8 +527,8 @@ describe('Engine', () => {
         },
       });
 
-      expect(lastSender().sendText).toHaveBeenCalledWith(
-        expect.stringContaining('build finished successfully'),
+      expect(lastSender().sendMarkdown).toHaveBeenCalledWith(
+        expect.stringContaining('step 1\nstep 2\nstep 3'),
         undefined,
       );
       expect(permissionService.handleAction).not.toHaveBeenCalled();

@@ -35,6 +35,7 @@ export interface WatchRuntimeState {
   unreadCount: number;
   lastStatus?: RuntimeSession['status'];
   lastSummary?: string;
+  lastOutputPreview?: string;
   lastNotifiedAt?: number;
 }
 
