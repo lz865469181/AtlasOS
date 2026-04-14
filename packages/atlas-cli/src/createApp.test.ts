@@ -1,6 +1,33 @@
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { createApp } from './createApp.js';
 import type { AtlasConfig, CodeLinkConfig } from './createApp.js';
+
+const expressMocks = vi.hoisted(() => ({
+  json: vi.fn(() => 'json-middleware'),
+  get: vi.fn(),
+  post: vi.fn(),
+  delete: vi.fn(),
+  use: vi.fn(),
+  listen: vi.fn((_port: number, cb?: () => void) => {
+    cb?.();
+    return { close: vi.fn() };
+  }),
+}));
+
+vi.mock('express', () => ({
+  default: Object.assign(
+    () => ({
+      use: expressMocks.use,
+      get: expressMocks.get,
+      post: expressMocks.post,
+      delete: expressMocks.delete,
+      listen: expressMocks.listen,
+    }),
+    {
+      json: expressMocks.json,
+    },
+  ),
+}));
 
 vi.mock('codelink-gateway', async () => {
   return vi.importActual('../../atlas-gateway/src/index.ts');
@@ -20,7 +47,39 @@ vi.mock('codelink-agent', () => ({
   },
 }));
 
+function findRouteHandler(mock: ReturnType<typeof vi.fn>, path: string) {
+  const call = mock.mock.calls.find((entry) => entry[0] === path);
+  expect(call).toBeTruthy();
+  return call?.[1] as (req: any, res: any) => unknown;
+}
+
+function makeResponseRecorder() {
+  const response = {
+    statusCode: 200,
+    body: undefined as unknown,
+    status(code: number) {
+      response.statusCode = code;
+      return response;
+    },
+    json(payload: unknown) {
+      response.body = payload;
+      return response;
+    },
+  };
+
+  return response;
+}
+
 describe('createApp', () => {
+  beforeEach(() => {
+    expressMocks.json.mockClear();
+    expressMocks.get.mockClear();
+    expressMocks.post.mockClear();
+    expressMocks.delete.mockClear();
+    expressMocks.use.mockClear();
+    expressMocks.listen.mockClear();
+  });
+
   // ── Legacy AppConfig ───────────────────────────────────────────────────
 
   it('returns an object with start and stop methods (legacy config)', () => {
@@ -138,5 +197,80 @@ describe('createApp', () => {
 
     const app = createApp(config);
     expect(app).toBeDefined();
+  });
+
+  it('registers inbox and event ingestion routes for external runtimes', async () => {
+    const app = createApp({
+      feishuAppId: 'test-id',
+      feishuAppSecret: 'test-secret',
+      agentCwd: '/tmp',
+    });
+
+    await app.start();
+
+    const registeredGets = expressMocks.get.mock.calls.map((call) => call[0]);
+    const registeredPosts = expressMocks.post.mock.calls.map((call) => call[0]);
+
+    expect(registeredGets).toContain('/api/runtimes/:runtimeId/inbox');
+    expect(registeredPosts).toContain('/api/runtimes/:runtimeId/events');
+
+    await app.stop();
+  });
+
+  it('returns 404 when polling inbox for an unknown runtime', async () => {
+    const app = createApp({
+      feishuAppId: 'test-id',
+      feishuAppSecret: 'test-secret',
+      agentCwd: '/tmp',
+    });
+
+    await app.start();
+
+    const inboxHandler = findRouteHandler(expressMocks.get, '/api/runtimes/:runtimeId/inbox');
+    const response = makeResponseRecorder();
+
+    inboxHandler({ params: { runtimeId: 'runtime-missing' } }, response);
+
+    expect(response.statusCode).toBe(404);
+    expect(response.body).toEqual({ error: 'runtime not found' });
+
+    await app.stop();
+  });
+
+  it('rejects empty event ingestion payloads for a known runtime', async () => {
+    const app = createApp({
+      feishuAppId: 'test-id',
+      feishuAppSecret: 'test-secret',
+      agentCwd: '/tmp',
+    });
+
+    await app.start();
+
+    const registerHandler = findRouteHandler(expressMocks.post, '/api/runtimes/register');
+    const eventsHandler = findRouteHandler(expressMocks.post, '/api/runtimes/:runtimeId/events');
+
+    const registerResponse = makeResponseRecorder();
+    await registerHandler({
+      body: {
+        runtimeId: 'runtime-external-1',
+        source: 'external',
+        provider: 'claude',
+        transport: 'bridge',
+        displayName: 'bridge-runtime',
+      },
+    }, registerResponse);
+
+    expect(registerResponse.statusCode).toBe(200);
+
+    const response = makeResponseRecorder();
+    eventsHandler({
+      params: { runtimeId: 'runtime-external-1' },
+      body: {},
+    }, response);
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toEqual({ error: 'message or messages is required' });
+
+    await app.stop();
   });
 });

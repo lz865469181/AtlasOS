@@ -10,7 +10,7 @@ This guide installs the current `packages/*` implementation of CodeLink in the `
 | Yarn | 1.x |
 | Git | any recent version |
 
-`tmux` is optional. You only need it when bridging a local Claude Code or Codex session through `yarn runtime ...`.
+`tmux` is the recommended path when you want Feishu or DingTalk to control a real local Claude Code or Codex session. Managed runtimes are available as a supplement, but the primary local interaction model is tmux-backed attach.
 
 ## 1. Clone And Install
 
@@ -101,6 +101,8 @@ Expected startup includes the runtime API plus whichever channels you configured
 
 ## Optional: Bridge A tmux Runtime
 
+This is the recommended workflow for local coding sessions that are already running on your machine.
+
 Examples:
 
 ```bash
@@ -142,6 +144,21 @@ Behavior:
 - `adopt` registers an existing tmux session and does not kill it when later dropped.
 - Re-adopting the same provider and tmux session reuses the existing runtime entry.
 - Chat `/attach` binds Feishu or DingTalk directly to that tmux-backed runtime.
+- Managed Codex SDK runtimes remain available, but tmux-backed runtimes are the main path for taking over local interactive coding sessions.
+
+## Optional: External Runtime HTTP Bridge
+
+This is an advanced integration path for externally managed runtimes. Use it when tmux is not the transport, but you still want CodeLink cards and chat bindings.
+
+Contract summary:
+
+- `POST /api/runtimes/register` creates an external runtime entry. Set `source=external` and `transport=bridge`.
+- `GET /api/runtimes/:runtimeId/inbox` drains queued actions from chat. Items are `prompt`, `cancel`, or `permission-response`.
+- `POST /api/runtimes/:runtimeId/events` sends one `message` object or a `messages` array back into CodeLink.
+- `POST /api/runtimes/:runtimeId/events` returns `400` when the payload has neither `message` nor `messages`.
+- `GET /api/runtimes/:runtimeId/inbox` and `POST /api/runtimes/:runtimeId/events` return `404` when the runtime is unknown.
+
+Use tmux when you want to control a real local Claude Code or Codex CLI session. Use the HTTP bridge only for custom runtime adapters.
 
 ## Background Service
 

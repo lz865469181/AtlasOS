@@ -265,6 +265,8 @@ describe('CommandRegistry', () => {
       runtimes?: RuntimeSession[];
       activeRuntimeId?: string | null;
       attachedRuntimeIds?: string[];
+      defaultAgentId?: string;
+      defaultPermissionMode?: string;
     }): Promise<CommandContext & { runtimeBridge: { cancel: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn> } }> {
       const runtimeRegistry = new RuntimeRegistryImpl();
       const bindingStore = new BindingStoreImpl();
@@ -297,6 +299,8 @@ describe('CommandRegistry', () => {
         runtimeRegistry,
         bindingStore,
         runtimeBridge: runtimeBridge as never,
+        defaultAgentId: overrides?.defaultAgentId,
+        defaultPermissionMode: overrides?.defaultPermissionMode,
         sender: {
           sendText: vi.fn().mockResolvedValue(undefined),
           sendCard: vi.fn().mockResolvedValue(undefined),
@@ -383,6 +387,24 @@ describe('CommandRegistry', () => {
       expect(output).toBe('Switched to agent: gemini');
     });
 
+    it('/agent codex creates a managed codex runtime', async () => {
+      const ctx = await makeContext();
+      const result = registry.resolve('/agent');
+      const output = await result!.command.execute('codex', ctx);
+
+      const activeRuntimeId = ctx.binding.activeRuntimeId;
+      expect(activeRuntimeId).toBeTruthy();
+      expect(ctx.runtimeRegistry.get(activeRuntimeId!)).toMatchObject({
+        displayName: 'codex',
+        provider: 'codex',
+        transport: 'sdk',
+        metadata: expect.objectContaining({
+          agentId: 'codex',
+        }),
+      });
+      expect(output).toBe('Switched to agent: codex');
+    });
+
     it('/model with no args shows current', async () => {
       const ctx = await makeContext();
       const result = registry.resolve('/model');
@@ -426,6 +448,27 @@ describe('CommandRegistry', () => {
       const output = await result!.command.execute('', ctx);
       expect(ctx.binding.activeRuntimeId).toBeTruthy();
       expect(ctx.binding.activeRuntimeId).not.toBe('runtime-1');
+      expect(output).toContain('Started new runtime: main');
+    });
+
+    it('/new honors the configured default agent when provided', async () => {
+      const ctx = await makeContext({
+        defaultAgentId: 'codex',
+        defaultPermissionMode: 'deny',
+      });
+      const result = registry.resolve('/new');
+      const output = await result!.command.execute('', ctx);
+      const runtime = ctx.runtimeRegistry.get(ctx.binding.activeRuntimeId!);
+
+      expect(runtime).toMatchObject({
+        displayName: 'main',
+        provider: 'codex',
+        transport: 'sdk',
+        metadata: expect.objectContaining({
+          agentId: 'codex',
+          permissionMode: 'deny',
+        }),
+      });
       expect(output).toContain('Started new runtime: main');
     });
 

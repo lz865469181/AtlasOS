@@ -171,7 +171,10 @@ export function createApp(config: AppConfig | CodeLinkConfig | AtlasConfig): App
     agentOpts: { cwd: normalized.agentCwd, env: normalized.agentEnv },
     runtimeRegistry,
   });
-  const externalAdapter = new ExternalRuntimeAdapter();
+  const externalAdapter = new ExternalRuntimeAdapter({
+    cardEngine,
+    runtimeRegistry,
+  });
   const tmuxAdapter = new TmuxRuntimeAdapter({
     cardEngine,
     runtimeRegistry,
@@ -266,6 +269,8 @@ export function createApp(config: AppConfig | CodeLinkConfig | AtlasConfig): App
     commandRegistry,
     permissionService,
     senderFactory,
+    defaultAgentId: normalized.defaultAgent,
+    defaultPermissionMode: normalized.defaultPermissionMode,
     idleWatcher,
   });
 
@@ -438,6 +443,49 @@ export function createApp(config: AppConfig | CodeLinkConfig | AtlasConfig): App
             resumeHandle: runtime.resumeHandle,
           }));
         res.json(runtimes);
+      });
+
+      apiApp.get('/api/runtimes/:runtimeId/inbox', (req, res) => {
+        const runtimeId = req.params.runtimeId;
+        const runtime = runtimeRegistry.get(runtimeId);
+        if (!runtime) {
+          res.status(404).json({ error: 'runtime not found' });
+          return;
+        }
+
+        res.json({
+          ok: true,
+          items: externalAdapter.drainInbox(runtimeId),
+        });
+      });
+
+      apiApp.post('/api/runtimes/:runtimeId/events', (req, res) => {
+        const runtimeId = req.params.runtimeId;
+        const runtime = runtimeRegistry.get(runtimeId);
+        if (!runtime) {
+          res.status(404).json({ error: 'runtime not found' });
+          return;
+        }
+
+        const messages = Array.isArray(req.body?.messages)
+          ? req.body.messages
+          : (req.body?.message ? [req.body.message] : []);
+
+        if (messages.length === 0) {
+          res.status(400).json({ error: 'message or messages is required' });
+          return;
+        }
+
+        for (const message of messages) {
+          externalAdapter.ingest(runtime, message, {
+            chatId: typeof req.body?.chatId === 'string' ? req.body.chatId : undefined,
+          });
+        }
+
+        res.json({
+          ok: true,
+          accepted: messages.length,
+        });
       });
 
       apiApp.delete('/api/runtimes/:runtimeId', async (req, res) => {

@@ -5,11 +5,13 @@ export const NewCommand: Command = {
   name: 'new',
   description: 'Create a new CodeLink-managed runtime and switch this thread to it.',
   async execute(_args: string, context: CommandContext): Promise<string> {
+    const agentId = context.defaultAgentId ?? 'claude';
+    const permissionMode = context.defaultPermissionMode ?? 'normal';
     const runtime = await context.runtimeRegistry.create(
-      defaultRuntimeSpecForAgent('claude'),
+      defaultRuntimeSpecForAgent(agentId),
       {
         displayName: 'main',
-        metadata: { permissionMode: 'normal' },
+        metadata: { permissionMode },
       },
     );
     context.bindingStore.attach(context.binding.bindingId, runtime.id);

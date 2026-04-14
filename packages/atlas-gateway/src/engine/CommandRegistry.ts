@@ -10,6 +10,8 @@ export interface CommandContext {
   runtimeRegistry: RuntimeRegistryImpl;
   bindingStore: BindingStoreImpl;
   runtimeBridge: RuntimeBridgeImpl;
+  defaultAgentId?: string;
+  defaultPermissionMode?: string;
   sender: ChannelSender;
 }
 

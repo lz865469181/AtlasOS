@@ -1,6 +1,6 @@
 # CodeLink
 
-`claude-codex-lark-bridge` bridges local Claude Code and Codex runtimes into Feishu/Lark and DingTalk with thread-aware routing, streaming cards, permission handling, and optional tmux-backed remote attach.
+`claude-codex-lark-bridge` bridges local Claude Code and Codex runtimes into Feishu/Lark and DingTalk with thread-aware routing, streaming cards, permission handling, and tmux-backed remote attach for the primary local interaction path.
 
 ## Architecture
 
@@ -93,7 +93,14 @@ codelink.config.json -> atlas.config.json -> .env -> runtime overrides
 
 ## tmux External Runtimes
 
-tmux is optional for the main service. Install it only if you want to bridge an already-running local Claude Code or Codex session into Feishu/DingTalk.
+tmux is the recommended primary interaction path when you want to take over a real local Claude Code or Codex session from Feishu/DingTalk.
+
+Managed runtimes still exist as a supplement:
+
+- use tmux-backed runtimes when you want chat to control an already-running local coding session
+- use managed runtimes when you want CodeLink to create an SDK-driven runtime directly
+
+tmux is still optional for the base service. Install it when you want to bridge an already-running local Claude Code or Codex session into Feishu/DingTalk.
 
 Examples:
 
@@ -115,7 +122,38 @@ Behavior:
 - Feishu `/attach` and DingTalk `/attach` bind to that same tmux-backed runtime instead of shelling into `tmux attach`.
 - Re-adopting the same `provider + tmux session` reuses the existing runtime registration.
 
+Current recommendation:
+
+- for local Claude Code / Codex workflows, prefer `codelink-runtime start|adopt` + chat `/attach`
+- treat managed Codex/Claude runtimes as a fallback or lightweight direct-start option
+
 The standalone helper binary is `codelink-runtime`. `atlas-runtime` remains available as a compatibility alias.
+
+## External Runtime HTTP Bridge
+
+For advanced integrations, CodeLink also exposes a small polling bridge for externally managed runtimes. This is the secondary path behind tmux-backed local sessions.
+
+Register a runtime first:
+
+```bash
+POST /api/runtimes/register
+{
+  "runtimeId": "runtime-external-1",
+  "source": "external",
+  "provider": "claude",
+  "transport": "bridge",
+  "displayName": "bridge-runtime"
+}
+```
+
+Then use the runtime bridge endpoints:
+
+- `GET /api/runtimes/:runtimeId/inbox` drains queued chat actions for that runtime. Items are `prompt`, `cancel`, or `permission-response`.
+- `POST /api/runtimes/:runtimeId/events` pushes one `message` object or a `messages` array back into CodeLink card rendering.
+- `POST /api/runtimes/:runtimeId/events` returns `400` when neither `message` nor `messages` is provided.
+- `POST /api/runtimes/:runtimeId/events` and `GET /api/runtimes/:runtimeId/inbox` return `404` when the runtime is unknown.
+
+Message ingestion can optionally include `chatId` to override the runtime's remembered chat binding for that event batch.
 
 ## Development
 

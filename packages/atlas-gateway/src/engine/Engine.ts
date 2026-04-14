@@ -33,6 +33,8 @@ export interface EngineDeps {
   commandRegistry: CommandRegistryImpl;
   permissionService: PermissionService;
   senderFactory: SenderFactory;
+  defaultAgentId?: string;
+  defaultPermissionMode?: string;
   idleWatcher?: IdleWatcher;
 }
 
@@ -53,6 +55,8 @@ export class EngineImpl implements Engine {
   private readonly commandRegistry: CommandRegistryImpl;
   private readonly permissionService: PermissionService;
   private readonly senderFactory: SenderFactory;
+  private readonly defaultAgentId?: string;
+  private readonly defaultPermissionMode?: string;
   private readonly idleWatcher?: IdleWatcher;
 
   constructor(deps: EngineDeps) {
@@ -65,6 +69,8 @@ export class EngineImpl implements Engine {
     this.commandRegistry = deps.commandRegistry;
     this.permissionService = deps.permissionService;
     this.senderFactory = deps.senderFactory;
+    this.defaultAgentId = deps.defaultAgentId;
+    this.defaultPermissionMode = deps.defaultPermissionMode;
     this.idleWatcher = deps.idleWatcher;
   }
 
@@ -103,6 +109,8 @@ export class EngineImpl implements Engine {
           runtimeRegistry: this.runtimeRegistry,
           bindingStore: this.bindingStore,
           runtimeBridge: this.runtimeBridge,
+          defaultAgentId: this.defaultAgentId,
+          defaultPermissionMode: this.defaultPermissionMode,
           sender,
         };
 
