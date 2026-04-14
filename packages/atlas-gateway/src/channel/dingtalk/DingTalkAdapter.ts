@@ -2,6 +2,7 @@ import type { ChannelAdapter, MessageHandler } from '../ChannelAdapter.js';
 import type { ChannelSender } from '../ChannelSender.js';
 import type { ChannelEvent } from '../channelEvent.js';
 import type { CardModel } from '../../cards/CardModel.js';
+import { parseCardActionValue } from '../../cards/CardActionValue.js';
 import type { CardActionEvent } from '../../engine/Engine.js';
 import type { DingTalkClient, DingTalkActionCard } from './DingTalkClient.js';
 import type { DingTalkMessageEvent, DingTalkCardActionEvent } from './types.js';
@@ -306,9 +307,9 @@ export class DingTalkAdapter implements ChannelAdapter {
     const messageId = data.msgId;
     const chatId = data.conversationId;
     const userId = data.senderStaffId;
-    const value = data.value;
-    if (!messageId || !chatId || !userId || !value || typeof value !== 'object') return null;
-    return { messageId, chatId, userId, value: value as Record<string, unknown> };
+    const value = parseCardActionValue(data.value);
+    if (!messageId || !chatId || !userId || !value) return null;
+    return { messageId, chatId, userId, value };
   }
 
   /**

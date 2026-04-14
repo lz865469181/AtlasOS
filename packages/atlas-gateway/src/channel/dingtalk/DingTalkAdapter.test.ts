@@ -232,6 +232,22 @@ describe('DingTalkAdapter.toCardActionEvent', () => {
     });
   });
 
+  it('parses JSON string card action values into objects', () => {
+    const data: DingTalkCardActionEvent = {
+      msgId: 'card-msg-1',
+      conversationId: 'conv-789',
+      senderStaffId: 'user-42',
+      value: JSON.stringify({ action: 'focus', runtimeId: 'runtime-1' }) as unknown as Record<string, unknown>,
+    };
+    const result = (adapter as any).toCardActionEvent(data);
+    expect(result).toEqual({
+      messageId: 'card-msg-1',
+      chatId: 'conv-789',
+      userId: 'user-42',
+      value: { action: 'focus', runtimeId: 'runtime-1' },
+    });
+  });
+
   it('returns null when msgId is missing', () => {
     const data: DingTalkCardActionEvent = {
       conversationId: 'conv-789',

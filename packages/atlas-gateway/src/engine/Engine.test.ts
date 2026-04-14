@@ -330,6 +330,12 @@ describe('Engine', () => {
       deps = createDeps({
         bindingStore,
         senderFactory: factory,
+        runtimeRegistry: {
+          ...mockRuntimeRegistry(),
+          get: vi.fn().mockImplementation((runtimeId: string) => runtimeId === 'runtime-watch-1'
+            ? { id: 'runtime-watch-1', displayName: 'lab', status: 'idle' }
+            : undefined),
+        } as unknown as RuntimeRegistryImpl,
       });
       engine = new EngineImpl(deps);
 
@@ -345,12 +351,17 @@ describe('Engine', () => {
       expect(binding.watchState['runtime-watch-1']).toMatchObject({
         lastStatus: 'idle',
       });
-      expect(lastSender().sendText).toHaveBeenCalledWith(
-        expect.stringContaining('watching runtime'),
-        undefined,
-      );
-      expect(lastSender().sendText).toHaveBeenCalledWith(
-        expect.stringContaining('completed'),
+      expect(lastSender().sendCard).toHaveBeenCalledWith(
+        expect.objectContaining({
+          header: expect.objectContaining({
+            title: expect.stringContaining('Watching Runtime'),
+            status: 'done',
+          }),
+          actions: expect.arrayContaining([
+            expect.objectContaining({ label: 'Focus Runtime' }),
+            expect.objectContaining({ label: 'Stop Watching' }),
+          ]),
+        }),
         undefined,
       );
     });
@@ -365,6 +376,12 @@ describe('Engine', () => {
       deps = createDeps({
         bindingStore,
         senderFactory: factory,
+        runtimeRegistry: {
+          ...mockRuntimeRegistry(),
+          get: vi.fn().mockImplementation((runtimeId: string) => runtimeId === 'runtime-watch-1'
+            ? { id: 'runtime-watch-1', displayName: 'lab', status: 'running' }
+            : undefined),
+        } as unknown as RuntimeRegistryImpl,
       });
       engine = new EngineImpl(deps);
 
@@ -379,10 +396,90 @@ describe('Engine', () => {
         unreadCount: 1,
         lastSummary: 'Allow npm install?',
       });
-      expect(lastSender().sendText).toHaveBeenCalledWith(
-        expect.stringContaining('needs approval'),
+      expect(lastSender().sendCard).toHaveBeenCalledWith(
+        expect.objectContaining({
+          header: expect.objectContaining({
+            title: expect.stringContaining('Watching Runtime'),
+            status: 'waiting',
+          }),
+          actions: expect.arrayContaining([
+            expect.objectContaining({ label: 'Focus Runtime' }),
+            expect.objectContaining({ label: 'Stop Watching' }),
+          ]),
+        }),
         undefined,
       );
+    });
+  });
+
+  describe('watch control card actions', () => {
+    it('focus action promotes the watched runtime and demotes the previous active runtime', async () => {
+      const bindingStore = new BindingStoreImpl();
+      const binding = bindingStore.getOrCreate('ch-1', 'chat-1', 'chat-1');
+      bindingStore.attach(binding.bindingId, 'runtime-main');
+      bindingStore.attach(binding.bindingId, 'runtime-watch');
+      bindingStore.setActive(binding.bindingId, 'runtime-main');
+      bindingStore.setWatching(binding.bindingId, 'runtime-watch');
+
+      deps = createDeps({
+        bindingStore,
+        runtimeRegistry: {
+          ...mockRuntimeRegistry(),
+          get: vi.fn().mockImplementation((runtimeId: string) => ({
+            id: runtimeId,
+            displayName: runtimeId === 'runtime-main' ? 'main' : 'lab',
+            provider: 'claude',
+            transport: 'tmux',
+          })),
+        } as unknown as RuntimeRegistryImpl,
+      });
+      engine = new EngineImpl(deps);
+
+      await engine.handleCardAction({
+        messageId: 'msg-card-1',
+        chatId: 'chat-1',
+        userId: 'user-1',
+        value: {
+          v: 1,
+          kind: 'watch-control',
+          action: 'focus',
+          bindingId: binding.bindingId,
+          runtimeId: 'runtime-watch',
+        },
+      });
+
+      expect(binding.activeRuntimeId).toBe('runtime-watch');
+      expect(binding.watchRuntimeId).toBe('runtime-main');
+    });
+
+    it('unwatch action clears the watching runtime without delegating to permission service', async () => {
+      const bindingStore = new BindingStoreImpl();
+      const binding = bindingStore.getOrCreate('ch-1', 'chat-1', 'chat-1');
+      bindingStore.attach(binding.bindingId, 'runtime-watch');
+      bindingStore.setWatching(binding.bindingId, 'runtime-watch');
+
+      const permissionService = mockPermissionService();
+      deps = createDeps({
+        bindingStore,
+        permissionService,
+      });
+      engine = new EngineImpl(deps);
+
+      await engine.handleCardAction({
+        messageId: 'msg-card-1',
+        chatId: 'chat-1',
+        userId: 'user-1',
+        value: {
+          v: 1,
+          kind: 'watch-control',
+          action: 'unwatch',
+          bindingId: binding.bindingId,
+          runtimeId: 'runtime-watch',
+        },
+      });
+
+      expect(binding.watchRuntimeId).toBeNull();
+      expect(permissionService.handleAction).not.toHaveBeenCalled();
     });
   });
 });

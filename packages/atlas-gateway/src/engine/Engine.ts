@@ -14,6 +14,7 @@ import type { CardEngineImpl } from './CardEngine.js';
 import type { CommandContext, CommandRegistryImpl } from './CommandRegistry.js';
 import type { PermissionService } from './PermissionService.js';
 import type { IdleWatcher } from './IdleWatcher.js';
+import { buildWatchNotificationCard, parseWatchControlPayload } from './WatchControl.js';
 
 export interface CardActionEvent {
   messageId: string;
@@ -159,6 +160,12 @@ export class EngineImpl implements Engine {
   }
 
   async handleCardAction(event: CardActionEvent): Promise<void> {
+    const watchControl = parseWatchControlPayload(event.value);
+    if (watchControl) {
+      this.handleWatchControlAction(watchControl);
+      return;
+    }
+
     await this.permissionService.handleAction(event);
   }
 
@@ -169,7 +176,6 @@ export class EngineImpl implements Engine {
       const state = binding.watchState[runtimeId] ?? { unreadCount: 0 };
       const previousStatus = state.lastStatus;
       const summary = this.summaryForMessage(message);
-      const notification = this.notificationForWatchedMessage(runtimeId, message, previousStatus);
 
       if (summary) {
         state.lastSummary = summary;
@@ -183,10 +189,43 @@ export class EngineImpl implements Engine {
       binding.watchState[runtimeId] = state;
       binding.lastActiveAt = Date.now();
 
+      const notification = this.notificationForWatchedMessage(
+        binding.bindingId,
+        runtimeId,
+        message,
+        state,
+        previousStatus,
+      );
       const sender = this.senderFactory(binding.chatId, binding.channelId);
       if (notification) {
-        await sender.sendText(notification, undefined);
+        state.lastNotifiedAt = Date.now();
+        await sender.sendCard(notification, undefined);
       }
+    }
+  }
+
+  private handleWatchControlAction(payload: {
+    action: 'focus' | 'unwatch';
+    bindingId: string;
+    runtimeId: string;
+  }): void {
+    const binding = this.bindingStore.get(payload.bindingId);
+    if (!binding) {
+      return;
+    }
+
+    if (payload.action === 'focus') {
+      const previousActiveId = binding.activeRuntimeId;
+      this.bindingStore.setActive(binding.bindingId, payload.runtimeId);
+      this.bindingStore.setWatching(
+        binding.bindingId,
+        previousActiveId && previousActiveId !== payload.runtimeId ? previousActiveId : null,
+      );
+      return;
+    }
+
+    if (binding.watchRuntimeId === payload.runtimeId) {
+      this.bindingStore.setWatching(binding.bindingId, null);
     }
   }
 
@@ -215,24 +254,54 @@ export class EngineImpl implements Engine {
   }
 
   private notificationForWatchedMessage(
+    bindingId: string,
     runtimeId: string,
     message: AgentMessage,
+    state: {
+      unreadCount: number;
+      lastSummary?: string;
+      lastStatus?: RuntimeSession['status'];
+    },
     previousStatus?: RuntimeSession['status'],
-  ): string | null {
+  ): CardModel | null {
     const runtime = this.runtimeRegistry.get(runtimeId);
     const label = runtime?.displayName ?? runtimeId.slice(0, 8);
 
     if (message.type === 'permission-request' || message.type === 'exec-approval-request') {
-      return `The watching runtime **${label}** needs approval. Use /focus ${label} to take over.`;
+      return buildWatchNotificationCard({
+        bindingId,
+        runtimeId,
+        runtimeLabel: label,
+        status: 'waiting',
+        message: `The watching runtime **${label}** needs approval.`,
+        watchState: state,
+        runtimeStatus: runtime?.status,
+      });
     }
 
     if (message.type === 'status') {
       if (message.status === 'idle' && previousStatus === 'running') {
-        return `The watching runtime **${label}** completed and is now idle.`;
+        return buildWatchNotificationCard({
+          bindingId,
+          runtimeId,
+          runtimeLabel: label,
+          status: 'done',
+          message: `The watching runtime **${label}** completed and is now idle.`,
+          watchState: state,
+          runtimeStatus: message.status,
+        });
       }
       if (message.status === 'error') {
         const detail = message.detail ? ` ${message.detail}` : '';
-        return `The watching runtime **${label}** entered error state.${detail}`;
+        return buildWatchNotificationCard({
+          bindingId,
+          runtimeId,
+          runtimeLabel: label,
+          status: 'error',
+          message: `The watching runtime **${label}** entered error state.${detail}`,
+          watchState: state,
+          runtimeStatus: message.status,
+        });
       }
     }
 

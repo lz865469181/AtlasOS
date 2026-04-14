@@ -738,6 +738,39 @@ describe('FeishuAdapter', () => {
       } satisfies CardActionEvent);
     });
 
+    it('parses JSON string card values into objects before forwarding', async () => {
+      let capturedHandlers: Record<string, (data: unknown) => Promise<unknown>> = {};
+      const onCardAction = vi.fn().mockResolvedValue(undefined);
+
+      const adapterWithCard = new FeishuAdapter({
+        config,
+        larkClient: mockClient,
+        wsClientFactory: () => ({
+          start: vi.fn().mockResolvedValue(undefined),
+          close: vi.fn(),
+        }),
+        eventDispatcherFactory: (handlers) => {
+          capturedHandlers = handlers;
+          return handlers;
+        },
+        onCardAction,
+      });
+
+      await adapterWithCard.start(vi.fn());
+
+      const feishuEvent = makeCardActionEvent({
+        action: { value: JSON.stringify({ action: 'focus', runtimeId: 'runtime-1' }), tag: 'button' },
+      });
+      await capturedHandlers['card.action.trigger']!(feishuEvent);
+
+      expect(onCardAction).toHaveBeenCalledWith({
+        messageId: 'om_msg_001',
+        chatId: 'oc_chat_001',
+        userId: 'ou_actor1',
+        value: { action: 'focus', runtimeId: 'runtime-1' },
+      } satisfies CardActionEvent);
+    });
+
     it('ignores card action with missing fields', async () => {
       let capturedHandlers: Record<string, (data: unknown) => Promise<unknown>> = {};
       const onCardAction = vi.fn().mockResolvedValue(undefined);

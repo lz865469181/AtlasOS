@@ -45,5 +45,5 @@ export interface DingTalkCardActionEvent {
   msgId?: string;
   conversationId?: string;
   senderStaffId?: string;
-  value?: Record<string, unknown>;
+  value?: unknown;
 }

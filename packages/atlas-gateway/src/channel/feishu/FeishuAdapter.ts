@@ -2,6 +2,7 @@ import type { ChannelAdapter, MessageHandler } from '../ChannelAdapter.js';
 import type { ChannelSender } from '../ChannelSender.js';
 import type { ChannelEvent } from '../channelEvent.js';
 import type { CardModel } from '../../cards/CardModel.js';
+import { parseCardActionValue } from '../../cards/CardActionValue.js';
 import type { CardActionEvent } from '../../engine/Engine.js';
 import { FeishuCardRenderer } from './FeishuCardRenderer.js';
 
@@ -447,9 +448,9 @@ export class FeishuAdapter implements ChannelAdapter {
     const messageId = data.open_message_id;
     const chatId = data.open_chat_id;
     const userId = data.operator?.open_id;
-    const value = data.action?.value;
-    if (!messageId || !chatId || !userId || !value || typeof value !== 'object') return null;
-    return { messageId, chatId, userId, value: value as Record<string, unknown> };
+    const value = parseCardActionValue(data.action?.value);
+    if (!messageId || !chatId || !userId || !value) return null;
+    return { messageId, chatId, userId, value };
   }
 
   /**

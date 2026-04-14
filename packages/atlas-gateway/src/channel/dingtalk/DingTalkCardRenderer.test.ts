@@ -5,14 +5,14 @@ const renderer = new DingTalkCardRenderer();
 
 describe('DingTalkCardRenderer', () => {
   describe('toMarkdown', () => {
-    it('minimal card — no header, one markdown section', () => {
+    it('minimal card without header renders one markdown section', () => {
       const card = {
         sections: [{ type: 'markdown' as const, content: 'Hello world' }],
       };
       expect(renderer.toMarkdown(card)).toBe('Hello world');
     });
 
-    it('full card — header with running status, fields, divider, note', () => {
+    it('full card renders header, fields, divider, and note', () => {
       const card = {
         header: {
           title: 'Build Report',
@@ -37,7 +37,6 @@ describe('DingTalkCardRenderer', () => {
 
       expect(lines[0]).toBe('### ⏳ Build Report');
       expect(lines[1]).toBe('pipeline #42');
-      // blank line after header
       expect(lines[2]).toBe('');
       expect(md).toContain('**Branch**: main');
       expect(md).toContain('**Commit**: abc1234');
@@ -47,7 +46,7 @@ describe('DingTalkCardRenderer', () => {
   });
 
   describe('toActionCard', () => {
-    it('single button → singleTitle / singleURL', () => {
+    it('maps a single button to singleTitle and singleURL', () => {
       const card = {
         sections: [{ type: 'markdown' as const, content: 'Click below' }],
         actions: [{ type: 'button' as const, label: 'Open', value: 'open_link' }],
@@ -62,7 +61,7 @@ describe('DingTalkCardRenderer', () => {
       expect(ac.btnOrientation).toBeUndefined();
     });
 
-    it('multiple buttons → btns array with btnOrientation="1"', () => {
+    it('maps multiple buttons to the horizontal btn list', () => {
       const card = {
         header: { title: 'Confirm' },
         sections: [{ type: 'markdown' as const, content: 'Choose one' }],
@@ -84,7 +83,27 @@ describe('DingTalkCardRenderer', () => {
       expect(ac.singleURL).toBeUndefined();
     });
 
-    it('no actions → no btns or singleTitle', () => {
+    it('serializes object action values before encoding button URLs', () => {
+      const card = {
+        header: { title: 'Watcher' },
+        sections: [{ type: 'markdown' as const, content: 'Take action' }],
+        actions: [
+          {
+            type: 'button' as const,
+            label: 'Focus Runtime',
+            value: { v: 1, kind: 'watch-control', action: 'focus', runtimeId: 'runtime-1' },
+          },
+        ],
+      };
+
+      const ac = renderer.toActionCard(card);
+
+      expect(ac.singleURL).toBe(
+        'dingtalk://action?value=%7B%22v%22%3A1%2C%22kind%22%3A%22watch-control%22%2C%22action%22%3A%22focus%22%2C%22runtimeId%22%3A%22runtime-1%22%7D',
+      );
+    });
+
+    it('omits button fields when the card has no actions', () => {
       const card = {
         sections: [{ type: 'markdown' as const, content: 'Info only' }],
       };

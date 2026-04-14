@@ -23,7 +23,7 @@ export const CardSectionSchema = z.discriminatedUnion('type', [
 export const CardActionSchema = z.object({
   type: z.enum(['button', 'select']),
   label: z.string(),
-  value: z.string(),
+  value: z.union([z.string(), z.record(z.string(), z.unknown())]),
   style: z.enum(['primary', 'danger', 'default']).optional(),
 });
 

@@ -1,4 +1,5 @@
 import type { CardModel, CardSection, CardAction } from '../../cards/CardModel.js';
+import { stringifyCardActionValue } from '../../cards/CardActionValue.js';
 import type { CardRenderer } from '../../engine/CardRenderPipeline.js';
 import type { DingTalkActionCard } from './DingTalkClient.js';
 
@@ -26,13 +27,13 @@ export class DingTalkCardRenderer implements CardRenderer {
         // Single button → singleTitle/singleURL
         const action = card.actions[0]!;
         result.singleTitle = action.label;
-        result.singleURL = `dingtalk://action?value=${encodeURIComponent(action.value)}`;
+        result.singleURL = `dingtalk://action?value=${encodeURIComponent(stringifyCardActionValue(action.value))}`;
       } else {
         // Multiple buttons
         result.btnOrientation = '1'; // horizontal
         result.btns = card.actions.map((a: CardAction) => ({
           title: a.label,
-          actionURL: `dingtalk://action?value=${encodeURIComponent(a.value)}`,
+          actionURL: `dingtalk://action?value=${encodeURIComponent(stringifyCardActionValue(a.value))}`,
         }));
       }
     }
