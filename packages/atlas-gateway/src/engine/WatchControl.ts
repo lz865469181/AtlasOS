@@ -2,7 +2,7 @@ import * as z from 'zod';
 import type { CardModel } from '../cards/CardModel.js';
 import type { RuntimeSession, WatchRuntimeState } from '../runtime/RuntimeModels.js';
 
-export const WatchControlActionSchema = z.enum(['focus', 'unwatch']);
+export const WatchControlActionSchema = z.enum(['focus', 'show-latest-output', 'unwatch']);
 
 export const WatchControlPayloadSchema = z.object({
   v: z.literal(1),
@@ -74,6 +74,12 @@ export function buildWatchNotificationCard(params: WatchNotificationCardParams):
     },
     sections,
     actions: [
+      {
+        type: 'button',
+        label: 'Show Latest Output',
+        style: 'default',
+        value: createWatchControlPayload('show-latest-output', params.bindingId, params.runtimeId),
+      },
       {
         type: 'button',
         label: 'Focus Runtime',

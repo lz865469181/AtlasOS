@@ -162,7 +162,7 @@ export class EngineImpl implements Engine {
   async handleCardAction(event: CardActionEvent): Promise<void> {
     const watchControl = parseWatchControlPayload(event.value);
     if (watchControl) {
-      this.handleWatchControlAction(watchControl);
+      await this.handleWatchControlAction(watchControl, event);
       return;
     }
 
@@ -205,10 +205,10 @@ export class EngineImpl implements Engine {
   }
 
   private handleWatchControlAction(payload: {
-    action: 'focus' | 'unwatch';
+    action: 'focus' | 'show-latest-output' | 'unwatch';
     bindingId: string;
     runtimeId: string;
-  }): void {
+  }, event: CardActionEvent): Promise<void> | void {
     const binding = this.bindingStore.get(payload.bindingId);
     if (!binding) {
       return;
@@ -222,6 +222,15 @@ export class EngineImpl implements Engine {
         previousActiveId && previousActiveId !== payload.runtimeId ? previousActiveId : null,
       );
       return;
+    }
+
+    if (payload.action === 'show-latest-output') {
+      const sender = this.senderFactory(event.chatId);
+      const runtime = this.runtimeRegistry.get(payload.runtimeId);
+      const runtimeLabel = runtime?.displayName ?? payload.runtimeId.slice(0, 8);
+      const watchState = binding.watchState[payload.runtimeId];
+      const summary = watchState?.lastSummary ?? 'No captured output yet.';
+      return sender.sendText(`Latest output from **${runtimeLabel}**:\n${summary}`, undefined).then(() => undefined);
     }
 
     if (binding.watchRuntimeId === payload.runtimeId) {

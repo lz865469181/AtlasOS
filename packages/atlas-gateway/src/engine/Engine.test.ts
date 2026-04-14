@@ -358,6 +358,7 @@ describe('Engine', () => {
             status: 'done',
           }),
           actions: expect.arrayContaining([
+            expect.objectContaining({ label: 'Show Latest Output' }),
             expect.objectContaining({ label: 'Focus Runtime' }),
             expect.objectContaining({ label: 'Stop Watching' }),
           ]),
@@ -403,6 +404,7 @@ describe('Engine', () => {
             status: 'waiting',
           }),
           actions: expect.arrayContaining([
+            expect.objectContaining({ label: 'Show Latest Output' }),
             expect.objectContaining({ label: 'Focus Runtime' }),
             expect.objectContaining({ label: 'Stop Watching' }),
           ]),
@@ -479,6 +481,54 @@ describe('Engine', () => {
       });
 
       expect(binding.watchRuntimeId).toBeNull();
+      expect(permissionService.handleAction).not.toHaveBeenCalled();
+    });
+
+    it('show-latest-output action replies with the latest watching summary', async () => {
+      const { factory, lastSender } = mockSenderFactory();
+      const bindingStore = new BindingStoreImpl();
+      const binding = bindingStore.getOrCreate('ch-1', 'chat-1', 'chat-1');
+      bindingStore.attach(binding.bindingId, 'runtime-watch');
+      bindingStore.setWatching(binding.bindingId, 'runtime-watch');
+      binding.watchState['runtime-watch'] = {
+        unreadCount: 2,
+        lastSummary: 'build finished successfully',
+      };
+
+      const permissionService = mockPermissionService();
+      deps = createDeps({
+        bindingStore,
+        permissionService,
+        senderFactory: factory,
+        runtimeRegistry: {
+          ...mockRuntimeRegistry(),
+          get: vi.fn().mockReturnValue({
+            id: 'runtime-watch',
+            displayName: 'lab',
+            provider: 'claude',
+            transport: 'tmux',
+          }),
+        } as unknown as RuntimeRegistryImpl,
+      });
+      engine = new EngineImpl(deps);
+
+      await engine.handleCardAction({
+        messageId: 'msg-card-1',
+        chatId: 'chat-1',
+        userId: 'user-1',
+        value: {
+          v: 1,
+          kind: 'watch-control',
+          action: 'show-latest-output',
+          bindingId: binding.bindingId,
+          runtimeId: 'runtime-watch',
+        },
+      });
+
+      expect(lastSender().sendText).toHaveBeenCalledWith(
+        expect.stringContaining('build finished successfully'),
+        undefined,
+      );
       expect(permissionService.handleAction).not.toHaveBeenCalled();
     });
   });
