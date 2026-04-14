@@ -279,6 +279,23 @@ describe('FeishuChannelSender', () => {
         },
       });
     });
+
+    it('falls back to chat create when reply send fails', async () => {
+      vi.mocked(mockClient.im.message.reply).mockRejectedValueOnce(new Error('reply blocked'));
+
+      const msgId = await sender.sendText('Reply!', 'msg_original');
+
+      expect(msgId).toBe('msg_created_001');
+      expect(mockClient.im.message.reply).toHaveBeenCalledTimes(1);
+      expect(mockClient.im.message.create).toHaveBeenCalledWith({
+        params: { receive_id_type: 'chat_id' },
+        data: {
+          receive_id: 'oc_test_chat',
+          msg_type: 'text',
+          content: JSON.stringify({ text: 'Reply!' }),
+        },
+      });
+    });
   });
 
   describe('sendMarkdown', () => {
@@ -315,6 +332,18 @@ describe('FeishuChannelSender', () => {
       };
       await sender.sendCard(card, 'msg_parent');
       expect(mockClient.im.message.reply).toHaveBeenCalled();
+    });
+
+    it('falls back to chat create when card reply send fails', async () => {
+      vi.mocked(mockClient.im.message.reply).mockRejectedValueOnce(new Error('reply blocked'));
+      const card: CardModel = {
+        sections: [{ type: 'markdown', content: 'hi' }],
+      };
+
+      const msgId = await sender.sendCard(card, 'msg_parent');
+
+      expect(msgId).toBe('msg_created_001');
+      expect(mockClient.im.message.create).toHaveBeenCalled();
     });
   });
 

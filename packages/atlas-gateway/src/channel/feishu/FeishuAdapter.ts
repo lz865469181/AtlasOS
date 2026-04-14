@@ -210,23 +210,35 @@ export class FeishuChannelSender implements ChannelSender {
     this.renderer = renderer ?? new FeishuCardRenderer();
   }
 
+  private async createMessage(msgType: string, content: string): Promise<string> {
+    const resp = await this.larkClient.im.message.create({
+      params: { receive_id_type: 'chat_id' },
+      data: { receive_id: this.chatId, msg_type: msgType, content },
+    });
+    return resp?.data?.message_id ?? '';
+  }
+
   async sendText(text: string, replyTo?: string): Promise<string> {
     console.log(`[FeishuSender] sendText len=${text.length} replyTo=${replyTo} text="${text.slice(0, 80)}"`);
     console.trace('[FeishuSender] sendText stack');
     const content = JSON.stringify({ text });
     try {
       if (replyTo) {
-        const resp = await this.larkClient.im.message.reply({
-          path: { message_id: replyTo },
-          data: { content, msg_type: 'text' },
-        });
-        return resp?.data?.message_id ?? '';
+        try {
+          const resp = await this.larkClient.im.message.reply({
+            path: { message_id: replyTo },
+            data: { content, msg_type: 'text' },
+          });
+          return resp?.data?.message_id ?? '';
+        } catch (replyErr) {
+          log('warn', 'Feishu reply send failed; falling back to chat create', {
+            chatId: this.chatId,
+            replyTo,
+            error: String(replyErr),
+          });
+        }
       }
-      const resp = await this.larkClient.im.message.create({
-        params: { receive_id_type: 'chat_id' },
-        data: { receive_id: this.chatId, msg_type: 'text', content },
-      });
-      return resp?.data?.message_id ?? '';
+      return await this.createMessage('text', content);
     } catch (err) {
       log('error', 'Failed to send text', { chatId: this.chatId, error: String(err) });
       throw err;
@@ -241,17 +253,21 @@ export class FeishuChannelSender implements ChannelSender {
     const content = JSON.stringify(card);
     try {
       if (replyTo) {
-        const resp = await this.larkClient.im.message.reply({
-          path: { message_id: replyTo },
-          data: { content, msg_type: 'interactive' },
-        });
-        return resp?.data?.message_id ?? '';
+        try {
+          const resp = await this.larkClient.im.message.reply({
+            path: { message_id: replyTo },
+            data: { content, msg_type: 'interactive' },
+          });
+          return resp?.data?.message_id ?? '';
+        } catch (replyErr) {
+          log('warn', 'Feishu markdown reply failed; falling back to chat create', {
+            chatId: this.chatId,
+            replyTo,
+            error: String(replyErr),
+          });
+        }
       }
-      const resp = await this.larkClient.im.message.create({
-        params: { receive_id_type: 'chat_id' },
-        data: { receive_id: this.chatId, msg_type: 'interactive', content },
-      });
-      return resp?.data?.message_id ?? '';
+      return await this.createMessage('interactive', content);
     } catch (err) {
       log('error', 'Failed to send markdown', { chatId: this.chatId, error: String(err) });
       throw err;
@@ -262,17 +278,21 @@ export class FeishuChannelSender implements ChannelSender {
     const content = this.renderer.toFeishuJsonString(card);
     try {
       if (replyTo) {
-        const resp = await this.larkClient.im.message.reply({
-          path: { message_id: replyTo },
-          data: { content, msg_type: 'interactive' },
-        });
-        return resp?.data?.message_id ?? '';
+        try {
+          const resp = await this.larkClient.im.message.reply({
+            path: { message_id: replyTo },
+            data: { content, msg_type: 'interactive' },
+          });
+          return resp?.data?.message_id ?? '';
+        } catch (replyErr) {
+          log('warn', 'Feishu card reply failed; falling back to chat create', {
+            chatId: this.chatId,
+            replyTo,
+            error: String(replyErr),
+          });
+        }
       }
-      const resp = await this.larkClient.im.message.create({
-        params: { receive_id_type: 'chat_id' },
-        data: { receive_id: this.chatId, msg_type: 'interactive', content },
-      });
-      return resp?.data?.message_id ?? '';
+      return await this.createMessage('interactive', content);
     } catch (err) {
       log('error', 'Failed to send card', { chatId: this.chatId, error: String(err) });
       throw err;
