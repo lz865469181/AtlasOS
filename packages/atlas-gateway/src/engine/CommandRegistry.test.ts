@@ -186,11 +186,13 @@ describe('CommandRegistry', () => {
       expect(names).toContain('help');
       expect(names).toContain('list');
       expect(names).toContain('attach');
-      expect(names).toContain('switch');
+      expect(names).toContain('focus');
+      expect(names).toContain('watch');
+      expect(names).toContain('unwatch');
       expect(names).toContain('detach');
       expect(names).toContain('sessions');
       expect(names).toContain('destroy');
-      expect(commands).toHaveLength(13);
+      expect(commands).toHaveLength(15);
     });
 
     it('should include custom commands after registration', () => {
@@ -201,7 +203,7 @@ describe('CommandRegistry', () => {
       });
       const names = registry.listCommands().map((c) => c.name);
       expect(names).toContain('deploy');
-      expect(names).toHaveLength(14);
+      expect(names).toHaveLength(16);
     });
   });
 
@@ -230,6 +232,9 @@ describe('CommandRegistry', () => {
       const output = await result!.command.execute('', {} as never);
       expect(typeof output).toBe('string');
       expect(output as string).toContain('Available commands');
+      expect(output as string).toContain('/focus');
+      expect(output as string).toContain('/watch');
+      expect(output as string).toContain('/unwatch');
     });
   });
 
@@ -265,6 +270,7 @@ describe('CommandRegistry', () => {
       runtimes?: RuntimeSession[];
       activeRuntimeId?: string | null;
       attachedRuntimeIds?: string[];
+      watchRuntimeId?: string | null;
       defaultAgentId?: string;
       defaultPermissionMode?: string;
     }): Promise<CommandContext & { runtimeBridge: { cancel: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn> } }> {
@@ -285,6 +291,10 @@ describe('CommandRegistry', () => {
         bindingStore.setActive(binding.bindingId, overrides.activeRuntimeId);
       } else if (runtimes[0]) {
         bindingStore.setActive(binding.bindingId, runtimes[0].id);
+      }
+
+      if (overrides?.watchRuntimeId !== undefined) {
+        bindingStore.setWatching(binding.bindingId, overrides.watchRuntimeId);
       }
 
       const runtimeBridge = {
@@ -356,6 +366,34 @@ describe('CommandRegistry', () => {
       const output = await result!.command.execute('', ctx);
       expect(output).toContain('Runtime: local-claude [claude/tmux]');
       expect(output).toContain('Resume: tmux-session atlas-local-claude');
+    });
+
+    it('/status includes the watching runtime summary when present', async () => {
+      const ctx = await makeContext({
+        runtimes: [
+          makeRuntime({ id: 'runtime-sdk-1', displayName: 'main' }),
+          makeRuntime({
+            id: 'runtime-watch-1',
+            displayName: 'lab',
+            status: 'running',
+            transport: 'tmux',
+            source: 'external',
+            capabilities: {
+              streaming: true,
+              permissionCards: false,
+              fileAccess: true,
+              imageInput: false,
+              terminalOutput: true,
+              patchEvents: false,
+            },
+          }),
+        ],
+        activeRuntimeId: 'runtime-sdk-1',
+        watchRuntimeId: 'runtime-watch-1',
+      });
+      const result = registry.resolve('/status');
+      const output = await result!.command.execute('', ctx);
+      expect(output).toContain('Watching: lab [claude/tmux] - running');
     });
 
     it('/status with no active runtime', async () => {
@@ -557,6 +595,102 @@ describe('CommandRegistry', () => {
       expect(output).toContain('**local-claude** [claude/tmux]');
     });
 
+    it('/sessions separates active and watching runtimes', async () => {
+      const ctx = await makeContext({
+        runtimes: [
+          makeRuntime({ id: 'runtime-a', displayName: 'main' }),
+          makeRuntime({
+            id: 'runtime-b',
+            displayName: 'lab',
+            transport: 'tmux',
+            source: 'external',
+            capabilities: {
+              streaming: true,
+              permissionCards: false,
+              fileAccess: true,
+              imageInput: false,
+              terminalOutput: true,
+              patchEvents: false,
+            },
+          }),
+        ],
+        activeRuntimeId: 'runtime-a',
+        watchRuntimeId: 'runtime-b',
+      });
+      const result = registry.resolve('/sessions');
+      const output = await result!.command.execute('', ctx);
+
+      expect(output).toContain('Active: **main** [claude/sdk]');
+      expect(output).toContain('Watching: **lab** [claude/tmux]');
+    });
+
+    it('/watch marks a non-active runtime as watching', async () => {
+      const ctx = await makeContext({
+        runtimes: [
+          makeRuntime({ id: 'runtime-a', displayName: 'main' }),
+          makeRuntime({ id: 'runtime-b', displayName: 'lab' }),
+        ],
+        activeRuntimeId: 'runtime-a',
+      });
+      const result = registry.resolve('/watch');
+      const output = await result!.command.execute('lab', ctx);
+
+      expect(ctx.binding.activeRuntimeId).toBe('runtime-a');
+      expect(ctx.binding.watchRuntimeId).toBe('runtime-b');
+      expect(output).toContain('Watching **lab**');
+    });
+
+    it('/watch rejects the active runtime', async () => {
+      const ctx = await makeContext({
+        runtimes: [makeRuntime({ id: 'runtime-a', displayName: 'main' })],
+        activeRuntimeId: 'runtime-a',
+      });
+      const result = registry.resolve('/watch');
+      const output = await result!.command.execute('main', ctx);
+
+      expect(output).toContain('already the active runtime');
+    });
+
+    it('/focus promotes the watching runtime to active and demotes the previous active runtime to watching', async () => {
+      const ctx = await makeContext({
+        runtimes: [
+          makeRuntime({ id: 'runtime-a', displayName: 'main' }),
+          makeRuntime({ id: 'runtime-b', displayName: 'lab' }),
+        ],
+        activeRuntimeId: 'runtime-a',
+        watchRuntimeId: 'runtime-b',
+      });
+      const result = registry.resolve('/focus');
+      const output = await result!.command.execute('lab', ctx);
+
+      expect(ctx.binding.activeRuntimeId).toBe('runtime-b');
+      expect(ctx.binding.watchRuntimeId).toBe('runtime-a');
+      expect(output).toContain('Focused **lab**');
+    });
+
+    it('/switch resolves to the focus command', () => {
+      const result = registry.resolve('/switch lab');
+      expect(result).not.toBeNull();
+      expect(result!.command.name).toBe('focus');
+      expect(result!.args).toBe('lab');
+    });
+
+    it('/unwatch clears the watching runtime', async () => {
+      const ctx = await makeContext({
+        runtimes: [
+          makeRuntime({ id: 'runtime-a', displayName: 'main' }),
+          makeRuntime({ id: 'runtime-b', displayName: 'lab' }),
+        ],
+        activeRuntimeId: 'runtime-a',
+        watchRuntimeId: 'runtime-b',
+      });
+      const result = registry.resolve('/unwatch');
+      const output = await result!.command.execute('', ctx);
+
+      expect(ctx.binding.watchRuntimeId).toBeNull();
+      expect(output).toContain('Stopped watching **lab**');
+    });
+
     it('/list shows tmux transport on bindings and runtimes', async () => {
       const ctx = await makeContext({
         runtimes: [
@@ -581,6 +715,35 @@ describe('CommandRegistry', () => {
 
       expect(output).toContain('active: local-claude [claude/tmux]');
       expect(output).toContain('**local-claude** [claude/tmux]');
+    });
+
+    it('/list shows the current watching runtime on the binding summary', async () => {
+      const ctx = await makeContext({
+        runtimes: [
+          makeRuntime({ id: 'runtime-a', displayName: 'main' }),
+          makeRuntime({
+            id: 'runtime-b',
+            displayName: 'lab',
+            transport: 'tmux',
+            source: 'external',
+            capabilities: {
+              streaming: true,
+              permissionCards: false,
+              fileAccess: true,
+              imageInput: false,
+              terminalOutput: true,
+              patchEvents: false,
+            },
+          }),
+        ],
+        activeRuntimeId: 'runtime-a',
+        watchRuntimeId: 'runtime-b',
+      });
+      const result = registry.resolve('/list');
+      const output = await result!.command.execute('', ctx);
+
+      expect(output).toContain('active: main [claude/sdk]');
+      expect(output).toContain('watching: lab [claude/tmux]');
     });
   });
 

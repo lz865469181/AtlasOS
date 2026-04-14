@@ -38,9 +38,15 @@ export const ListCommand: Command = {
         const activeRuntime = binding.activeRuntimeId
           ? context.runtimeRegistry.get(binding.activeRuntimeId)
           : undefined;
+        const watchRuntime = binding.watchRuntimeId
+          ? context.runtimeRegistry.get(binding.watchRuntimeId)
+          : undefined;
         const label = activeRuntime?.displayName ?? activeRuntime?.id.slice(0, 8) ?? '(none)';
         const runtimeKind = activeRuntime ? ` [${activeRuntime.provider}/${activeRuntime.transport}]` : '';
-        lines.push(`${i + 1}. **${threadInfo}** active: ${label}${runtimeKind} - ${active}`);
+        const watchLabel = watchRuntime
+          ? ` | watching: ${watchRuntime.displayName ?? watchRuntime.id.slice(0, 8)} [${watchRuntime.provider}/${watchRuntime.transport}]`
+          : '';
+        lines.push(`${i + 1}. **${threadInfo}** active: ${label}${runtimeKind}${watchLabel} - ${active}`);
         if (i < allBindings.length - 1) {
           lines.push('');
         }

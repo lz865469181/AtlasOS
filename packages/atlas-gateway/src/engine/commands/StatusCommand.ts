@@ -12,6 +12,9 @@ export const StatusCommand: Command = {
     if (!runtime) {
       return 'Active runtime is missing.';
     }
+    const watchRuntime = context.binding.watchRuntimeId
+      ? context.runtimeRegistry.get(context.binding.watchRuntimeId)
+      : undefined;
 
     const uptime = Math.floor((Date.now() - runtime.createdAt) / 1000);
     const mins = Math.floor(uptime / 60);
@@ -30,6 +33,11 @@ export const StatusCommand: Command = {
 
     if (runtime.resumeHandle) {
       lines.push(`Resume: ${runtime.resumeHandle.kind} ${runtime.resumeHandle.value}`);
+    }
+
+    if (watchRuntime) {
+      const watchLabel = watchRuntime.displayName ?? watchRuntime.id.slice(0, 8);
+      lines.push(`Watching: ${watchLabel} [${watchRuntime.provider}/${watchRuntime.transport}] - ${watchRuntime.status}`);
     }
 
     return lines.join('\n');

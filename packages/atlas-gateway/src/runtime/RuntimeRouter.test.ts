@@ -8,6 +8,9 @@ describe('RuntimeRouterImpl', () => {
         getOrCreate: vi.fn().mockReturnValue({
           bindingId: 'b1',
           activeRuntimeId: 'r1',
+          watchRuntimeId: null,
+          attachedRuntimeIds: ['r1'],
+          watchState: {},
           defaultRuntimeId: null,
         }),
       } as any,

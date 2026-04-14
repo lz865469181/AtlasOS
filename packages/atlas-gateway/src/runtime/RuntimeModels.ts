@@ -31,13 +31,22 @@ export interface AgentSpec {
   defaultCapabilities: RuntimeCapabilities;
 }
 
+export interface WatchRuntimeState {
+  unreadCount: number;
+  lastStatus?: RuntimeSession['status'];
+  lastSummary?: string;
+  lastNotifiedAt?: number;
+}
+
 export interface ConversationBinding {
   bindingId: string;
   channelId: string;
   chatId: string;
   threadKey: string;
   activeRuntimeId: string | null;
+  watchRuntimeId: string | null;
   attachedRuntimeIds: string[];
+  watchState: Record<string, WatchRuntimeState>;
   defaultRuntimeId: string | null;
   createdAt: number;
   lastActiveAt: number;

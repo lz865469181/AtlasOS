@@ -9,24 +9,50 @@ export const SessionsCommand: Command = {
     }
 
     const lines: string[] = [];
-    lines.push(`**Attached Runtimes (${context.binding.attachedRuntimeIds.length})**\n`);
+    const activeRuntime = context.binding.activeRuntimeId
+      ? context.runtimeRegistry.get(context.binding.activeRuntimeId)
+      : undefined;
+    const watchRuntime = context.binding.watchRuntimeId
+      ? context.runtimeRegistry.get(context.binding.watchRuntimeId)
+      : undefined;
 
-    for (let i = 0; i < context.binding.attachedRuntimeIds.length; i++) {
-      const runtimeId = context.binding.attachedRuntimeIds[i];
+    lines.push(`**Thread Runtime Roles**\n`);
+
+    if (activeRuntime) {
+      const label = activeRuntime.displayName ?? activeRuntime.id.slice(0, 8);
+      lines.push(`Active: **${label}** [${activeRuntime.provider}/${activeRuntime.transport}]`);
+    } else {
+      lines.push('Active: (none)');
+    }
+
+    if (watchRuntime) {
+      const label = watchRuntime.displayName ?? watchRuntime.id.slice(0, 8);
+      lines.push(`Watching: **${label}** [${watchRuntime.provider}/${watchRuntime.transport}]`);
+    }
+
+    const secondaryRuntimeIds = context.binding.attachedRuntimeIds.filter(
+      (runtimeId) => runtimeId !== context.binding.activeRuntimeId && runtimeId !== context.binding.watchRuntimeId,
+    );
+
+    if (secondaryRuntimeIds.length > 0) {
+      lines.push('');
+      lines.push(`**Attached Runtimes (${secondaryRuntimeIds.length})**\n`);
+    }
+
+    for (let i = 0; i < secondaryRuntimeIds.length; i++) {
+      const runtimeId = secondaryRuntimeIds[i];
       const runtime = context.runtimeRegistry.get(runtimeId);
-      const isActive = runtimeId === context.binding.activeRuntimeId;
-      const indicator = isActive ? ' *' : '';
 
       if (runtime) {
         const label = runtime.displayName ?? runtimeId.slice(0, 8);
-        lines.push(`${i + 1}. **${label}** [${runtime.provider}/${runtime.transport}] \`${runtimeId.slice(0, 8)}\`${indicator}`);
+        lines.push(`${i + 1}. **${label}** [${runtime.provider}/${runtime.transport}] \`${runtimeId.slice(0, 8)}\``);
       } else {
         lines.push(`${i + 1}. ~~${runtimeId.slice(0, 8)}~~ (gone)`);
       }
     }
 
     lines.push('');
-    lines.push('Use /switch <number> to switch.');
+    lines.push('Use /focus <number|name|id> to promote another runtime.');
     return lines.join('\n');
   },
 };

@@ -21,7 +21,9 @@ export class BindingStoreImpl {
       chatId,
       threadKey,
       activeRuntimeId: null,
+      watchRuntimeId: null,
       attachedRuntimeIds: [],
+      watchState: {},
       defaultRuntimeId: null,
       createdAt: now,
       lastActiveAt: now,
@@ -45,6 +47,10 @@ export class BindingStoreImpl {
     if (binding.activeRuntimeId === runtimeId) {
       binding.activeRuntimeId = null;
     }
+    if (binding.watchRuntimeId === runtimeId) {
+      binding.watchRuntimeId = null;
+    }
+    delete binding.watchState[runtimeId];
     if (binding.defaultRuntimeId === runtimeId) {
       binding.defaultRuntimeId = null;
     }
@@ -55,6 +61,24 @@ export class BindingStoreImpl {
     const binding = this.bindings.get(bindingId);
     if (!binding) return;
     binding.activeRuntimeId = runtimeId;
+    if (runtimeId && binding.watchRuntimeId === runtimeId) {
+      binding.watchRuntimeId = null;
+    }
+    binding.lastActiveAt = Date.now();
+  }
+
+  setWatching(bindingId: string, runtimeId: string | null): void {
+    const binding = this.bindings.get(bindingId);
+    if (!binding) return;
+
+    binding.watchRuntimeId = runtimeId && runtimeId !== binding.activeRuntimeId
+      ? runtimeId
+      : null;
+
+    if (binding.watchRuntimeId) {
+      binding.watchState[binding.watchRuntimeId] ??= { unreadCount: 0 };
+    }
+
     binding.lastActiveAt = Date.now();
   }
 
@@ -80,7 +104,11 @@ export class BindingStoreImpl {
   restoreFrom(items: ConversationBinding[]): void {
     this.bindings.clear();
     for (const item of items) {
-      this.bindings.set(item.bindingId, item);
+      this.bindings.set(item.bindingId, {
+        ...item,
+        watchRuntimeId: item.watchRuntimeId ?? null,
+        watchState: item.watchState ?? {},
+      });
     }
   }
 

@@ -11,6 +11,8 @@ CodeLink uses a dual-layer model:
 
 That split lets `/new`, `/attach`, `/switch`, `/detach`, and `/sessions` behave cleanly without mixing transport state and chat state.
 
+Each thread now supports one primary interactive runtime plus one secondary watching runtime. The active runtime receives normal prompts and detailed output; the watching runtime is meant for status checks, completion awareness, and on-demand promotion back to active.
+
 ## Monorepo Layout
 
 ```text
@@ -84,7 +86,10 @@ codelink.config.json -> atlas.config.json -> .env -> runtime overrides
 | `/status` | Show runtime provider, transport, model, mode, uptime, and runtime ID |
 | `/list` | List thread bindings and known runtimes in the current chat |
 | `/attach <name|id>` | Attach an existing runtime to this thread |
-| `/switch <number|name|id>` | Switch to another attached runtime |
+| `/focus <number|name|id>` | Promote another attached runtime to active |
+| `/switch <number|name|id>` | Alias for `/focus` |
+| `/watch <number|name|id>` | Mark an attached runtime as the secondary watching runtime |
+| `/unwatch` | Clear the current watching runtime |
 | `/detach` | Detach the current runtime from this thread |
 | `/destroy <id|all>` | Destroy runtimes |
 | `/sessions` | List runtimes attached to this thread |

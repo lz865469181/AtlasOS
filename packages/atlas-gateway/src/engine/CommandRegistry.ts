@@ -36,7 +36,9 @@ import { ModeCommand } from './commands/ModeCommand.js';
 import { NewCommand } from './commands/NewCommand.js';
 import { ListCommand } from './commands/ListCommand.js';
 import { AttachCommand } from './commands/AttachCommand.js';
-import { SwitchCommand } from './commands/SwitchCommand.js';
+import { FocusCommand } from './commands/FocusCommand.js';
+import { WatchCommand } from './commands/WatchCommand.js';
+import { UnwatchCommand } from './commands/UnwatchCommand.js';
 import { DetachCommand } from './commands/DetachCommand.js';
 import { SessionsCommand } from './commands/SessionsCommand.js';
 import { DestroyCommand } from './commands/DestroyCommand.js';
@@ -46,7 +48,7 @@ const helpCommand: Command = {
   aliases: ['h', '?'],
   description: 'Show available commands.',
   execute: async () =>
-    'Available commands: /agent, /model, /mode, /cancel, /status, /new, /destroy, /list, /attach, /switch, /detach, /sessions, /help',
+    'Available commands: /agent, /model, /mode, /cancel, /status, /new, /destroy, /list, /attach, /focus, /watch, /unwatch, /detach, /sessions, /help',
 };
 
 const builtinCommands: Command[] = [
@@ -58,7 +60,9 @@ const builtinCommands: Command[] = [
   NewCommand,
   ListCommand,
   AttachCommand,
-  SwitchCommand,
+  FocusCommand,
+  WatchCommand,
+  UnwatchCommand,
   DetachCommand,
   SessionsCommand,
   DestroyCommand,
