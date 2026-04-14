@@ -1,8 +1,11 @@
 import express from 'express';
 import type { Server } from 'node:http';
+import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { promisify } from 'node:util';
 import { agentRegistry } from 'codelink-agent';
 import type { AgentMessage } from 'codelink-agent';
+import { launchTmuxRuntime } from './runtimeLauncher.js';
 import {
   BindingStoreImpl,
   CardEngineImpl,
@@ -41,9 +44,12 @@ import type {
   RuntimeCapabilities,
   RuntimeSession,
   SenderFactory,
+  LocalRuntimeManager,
 } from 'codelink-gateway';
 
 export type { AtlasConfig, CodeLinkConfig };
+
+const execFileAsync = promisify(execFile);
 
 export interface AppConfig {
   feishuAppId?: string;
@@ -112,6 +118,13 @@ function defaultCapabilities(overrides?: Partial<RuntimeCapabilities>): RuntimeC
   };
 }
 
+function resolveRuntimeCliPath(provider: 'claude' | 'codex'): string {
+  const value = provider === 'codex'
+    ? (process.env.CODEX_CLI_PATH ?? 'codex')
+    : (process.env.CLAUDE_CLI_PATH ?? 'claude');
+  return value.replace(/^"|"$/g, '');
+}
+
 export function createApp(config: AppConfig | CodeLinkConfig | AtlasConfig): App {
   const normalized = normalizeConfig(config);
 
@@ -120,6 +133,43 @@ export function createApp(config: AppConfig | CodeLinkConfig | AtlasConfig): App
   const runtimeRegistry = new RuntimeRegistryImpl();
   const bindingStore = new BindingStoreImpl();
   const runtimeRouter = new RuntimeRouterImpl({ bindingStore, runtimeRegistry });
+  const registerExternalRuntime = async (payload: {
+    runtimeId?: string;
+    source: RuntimeSession['source'];
+    provider: RuntimeSession['provider'];
+    transport: RuntimeSession['transport'];
+    displayName: string;
+    workspaceId?: string;
+    projectId?: string;
+    resumeHandle?: RuntimeSession['resumeHandle'];
+    capabilities?: Partial<RuntimeCapabilities>;
+    metadata?: Record<string, string>;
+  }): Promise<RuntimeSession> => {
+    const now = Date.now();
+    const runtime: RuntimeSession = {
+      id: payload.runtimeId ?? randomUUID(),
+      source: payload.source,
+      provider: payload.provider,
+      transport: payload.transport,
+      status: 'idle',
+      displayName: payload.displayName,
+      workspaceId: payload.workspaceId,
+      projectId: payload.projectId,
+      resumeHandle: payload.resumeHandle,
+      capabilities: defaultCapabilities(payload.capabilities),
+      metadata: {
+        agentId: normalized.defaultAgent,
+        permissionMode: normalized.defaultPermissionMode,
+        ...(normalized.defaultModel ? { model: normalized.defaultModel } : {}),
+        ...(payload.metadata ?? {}),
+      },
+      createdAt: now,
+      lastActiveAt: now,
+    };
+
+    await runtimeRegistry.registerExternal(runtime);
+    return runtime;
+  };
 
   const adapters = new Map<string, ChannelAdapter>();
   const feishuRenderer = new FeishuCardRenderer();
@@ -202,6 +252,60 @@ export function createApp(config: AppConfig | CodeLinkConfig | AtlasConfig): App
     bridge: runtimeBridge,
   });
 
+  const localRuntimeManager: LocalRuntimeManager = {
+    startTmuxRuntime: async ({ provider, name }) => {
+      const tmuxBin =
+        process.env.CODELINK_TMUX_BIN
+        ?? process.env.ATLAS_TMUX_BIN
+        ?? process.env.TMUX_BIN
+        ?? 'tmux';
+      const cwd =
+        process.env.CODELINK_RUNTIME_CWD
+        ?? process.env.ATLAS_RUNTIME_CWD
+        ?? normalized.agentCwd;
+      const cliPath = resolveRuntimeCliPath(provider);
+      let registeredRuntime: RuntimeSession | null = null;
+
+      const launched = await launchTmuxRuntime({
+        provider,
+        name,
+        cwd,
+        cliPath,
+        serverUrl: 'local://createApp',
+      }, {
+        runCommand: async (args) => {
+          const { stdout } = await execFileAsync(tmuxBin, args, {
+            windowsHide: true,
+            maxBuffer: 1024 * 1024 * 4,
+          });
+          return stdout;
+        },
+        registerRuntime: async (payload) => {
+          registeredRuntime = await registerExternalRuntime({
+            runtimeId: payload.runtimeId,
+            source: payload.source,
+            provider: payload.provider,
+            transport: payload.transport,
+            displayName: payload.displayName,
+            resumeHandle: payload.resumeHandle,
+            capabilities: payload.capabilities,
+            metadata: payload.metadata,
+          });
+        },
+      });
+
+      if (!registeredRuntime) {
+        throw new Error('tmux runtime registration did not complete');
+      }
+
+      return {
+        runtime: registeredRuntime,
+        sessionName: launched.sessionName,
+        tmuxTarget: launched.tmuxTarget,
+      };
+    },
+  };
+
   const commandRegistry = new CommandRegistryImpl();
 
   const idleWatcher = new IdleWatcher({
@@ -270,6 +374,7 @@ export function createApp(config: AppConfig | CodeLinkConfig | AtlasConfig): App
     commandRegistry,
     permissionService,
     senderFactory,
+    localRuntimeManager,
     defaultAgentId: normalized.defaultAgent,
     defaultPermissionMode: normalized.defaultPermissionMode,
     idleWatcher,
@@ -378,47 +483,20 @@ export function createApp(config: AppConfig | CodeLinkConfig | AtlasConfig): App
 
       apiApp.post('/api/runtimes/register', async (req, res) => {
         try {
+          const payload = req.body ?? {};
           const {
-            runtimeId,
             source,
             provider,
             transport,
             displayName,
-            workspaceId,
-            projectId,
-            resumeHandle,
-            capabilities,
-            metadata,
-          } = req.body ?? {};
+          } = payload;
 
           if (!source || !provider || !transport || !displayName) {
             res.status(400).json({ error: 'source, provider, transport, and displayName are required' });
             return;
           }
 
-          const now = Date.now();
-          const runtime: RuntimeSession = {
-            id: runtimeId ?? randomUUID(),
-            source,
-            provider,
-            transport,
-            status: 'idle',
-            displayName,
-            workspaceId,
-            projectId,
-            resumeHandle,
-            capabilities: defaultCapabilities(capabilities),
-            metadata: {
-              agentId: normalized.defaultAgent,
-              permissionMode: normalized.defaultPermissionMode,
-              ...(normalized.defaultModel ? { model: normalized.defaultModel } : {}),
-              ...(metadata ?? {}),
-            },
-            createdAt: now,
-            lastActiveAt: now,
-          };
-
-          await runtimeRegistry.registerExternal(runtime);
+          const runtime = await registerExternalRuntime(payload);
           res.json({
             ok: true,
             runtime: {

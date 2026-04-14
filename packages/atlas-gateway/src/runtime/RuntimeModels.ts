@@ -46,6 +46,7 @@ export interface ConversationBinding {
   threadKey: string;
   activeRuntimeId: string | null;
   watchRuntimeId: string | null;
+  watchRuntimeIds: string[];
   attachedRuntimeIds: string[];
   watchState: Record<string, WatchRuntimeState>;
   defaultRuntimeId: string | null;

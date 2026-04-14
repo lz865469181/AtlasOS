@@ -453,6 +453,37 @@ describe('Engine', () => {
 
       expect(binding.activeRuntimeId).toBe('runtime-watch');
       expect(binding.watchRuntimeId).toBe('runtime-main');
+      expect(binding.watchRuntimeIds).toEqual(['runtime-main']);
+    });
+
+    it('focus action preserves other watching runtimes when promoting one watcher to active', async () => {
+      const bindingStore = new BindingStoreImpl();
+      const binding = bindingStore.getOrCreate('ch-1', 'chat-1', 'chat-1');
+      bindingStore.attach(binding.bindingId, 'runtime-main');
+      bindingStore.attach(binding.bindingId, 'runtime-watch-a');
+      bindingStore.attach(binding.bindingId, 'runtime-watch-b');
+      bindingStore.setActive(binding.bindingId, 'runtime-main');
+      bindingStore.addWatching(binding.bindingId, 'runtime-watch-a');
+      bindingStore.addWatching(binding.bindingId, 'runtime-watch-b');
+
+      deps = createDeps({ bindingStore });
+      engine = new EngineImpl(deps);
+
+      await engine.handleCardAction({
+        messageId: 'msg-card-1',
+        chatId: 'chat-1',
+        userId: 'user-1',
+        value: {
+          v: 1,
+          kind: 'watch-control',
+          action: 'focus',
+          bindingId: binding.bindingId,
+          runtimeId: 'runtime-watch-a',
+        },
+      });
+
+      expect(binding.activeRuntimeId).toBe('runtime-watch-a');
+      expect(binding.watchRuntimeIds).toEqual(['runtime-main', 'runtime-watch-b']);
     });
 
     it('unwatch action clears the watching runtime without delegating to permission service', async () => {

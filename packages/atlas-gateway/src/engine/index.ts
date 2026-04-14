@@ -32,7 +32,7 @@ export { CardEngineImpl } from './CardEngine.js';
 export type { CardEngine, CardEngineDeps } from './CardEngine.js';
 
 export { CommandRegistryImpl } from './CommandRegistry.js';
-export type { CommandRegistry, Command, CommandContext } from './CommandRegistry.js';
+export type { CommandRegistry, Command, CommandContext, LocalRuntimeManager } from './CommandRegistry.js';
 
 export { EngineImpl } from './Engine.js';
 export type { Engine, EngineDeps, CardActionEvent } from './Engine.js';
@@ -59,4 +59,5 @@ export {
   SwitchCommand,
   DetachCommand,
   SessionsCommand,
+  TmuxCommand,
 } from './commands/index.js';

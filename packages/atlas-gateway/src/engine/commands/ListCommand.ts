@@ -38,13 +38,14 @@ export const ListCommand: Command = {
         const activeRuntime = binding.activeRuntimeId
           ? context.runtimeRegistry.get(binding.activeRuntimeId)
           : undefined;
-        const watchRuntime = binding.watchRuntimeId
-          ? context.runtimeRegistry.get(binding.watchRuntimeId)
-          : undefined;
+        const watchRuntimes = binding.watchRuntimeIds
+          .map((runtimeId) => context.runtimeRegistry.get(runtimeId))
+          .filter((entry): entry is NonNullable<typeof entry> => entry != null);
         const label = activeRuntime?.displayName ?? activeRuntime?.id.slice(0, 8) ?? '(none)';
         const runtimeKind = activeRuntime ? ` [${activeRuntime.provider}/${activeRuntime.transport}]` : '';
-        const watchLabel = watchRuntime
-          ? ` | watching: ${watchRuntime.displayName ?? watchRuntime.id.slice(0, 8)} [${watchRuntime.provider}/${watchRuntime.transport}]`
+        const watchLabel = watchRuntimes.length > 0
+          ? ` | watching: ${watchRuntimes.map((runtime) =>
+            `${runtime.displayName ?? runtime.id.slice(0, 8)} [${runtime.provider}/${runtime.transport}]`).join(', ')}`
           : '';
         lines.push(`${i + 1}. **${threadInfo}** active: ${label}${runtimeKind}${watchLabel} - ${active}`);
         if (i < allBindings.length - 1) {

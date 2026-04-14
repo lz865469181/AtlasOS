@@ -20,7 +20,7 @@ export const WatchCommand: Command = {
     }
 
     context.bindingStore.attach(context.binding.bindingId, target.id);
-    context.bindingStore.setWatching(context.binding.bindingId, target.id);
+    context.bindingStore.addWatching(context.binding.bindingId, target.id);
 
     return `Watching **${target.displayName ?? target.id.slice(0, 8)}** [${target.provider}/${target.transport}].`;
   },

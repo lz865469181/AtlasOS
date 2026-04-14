@@ -24,10 +24,9 @@ export const FocusCommand: Command = {
 
     context.bindingStore.attach(context.binding.bindingId, target.id);
     context.bindingStore.setActive(context.binding.bindingId, target.id);
-    context.bindingStore.setWatching(
-      context.binding.bindingId,
-      previousActiveId && previousActiveId !== target.id ? previousActiveId : null,
-    );
+    if (previousActiveId && previousActiveId !== target.id) {
+      context.bindingStore.addWatching(context.binding.bindingId, previousActiveId);
+    }
 
     const label = target.displayName ?? target.id.slice(0, 8);
     return `Focused **${label}** [${target.provider}/${target.transport}].`;

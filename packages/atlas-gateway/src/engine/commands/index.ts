@@ -11,3 +11,4 @@ export { UnwatchCommand } from './UnwatchCommand.js';
 export { SwitchCommand } from './SwitchCommand.js';
 export { DetachCommand } from './DetachCommand.js';
 export { SessionsCommand } from './SessionsCommand.js';
+export { TmuxCommand } from './TmuxCommand.js';

@@ -3,6 +3,12 @@ import type { ConversationBinding } from './RuntimeModels.js';
 export class BindingStoreImpl {
   private bindings = new Map<string, ConversationBinding>();
 
+  private syncWatchAlias(binding: ConversationBinding): void {
+    binding.watchRuntimeIds = binding.watchRuntimeIds.filter((runtimeId, index, all) =>
+      runtimeId !== binding.activeRuntimeId && all.indexOf(runtimeId) === index);
+    binding.watchRuntimeId = binding.watchRuntimeIds[0] ?? null;
+  }
+
   get(bindingId: string): ConversationBinding | undefined {
     return this.bindings.get(bindingId);
   }
@@ -22,6 +28,7 @@ export class BindingStoreImpl {
       threadKey,
       activeRuntimeId: null,
       watchRuntimeId: null,
+      watchRuntimeIds: [],
       attachedRuntimeIds: [],
       watchState: {},
       defaultRuntimeId: null,
@@ -47,9 +54,8 @@ export class BindingStoreImpl {
     if (binding.activeRuntimeId === runtimeId) {
       binding.activeRuntimeId = null;
     }
-    if (binding.watchRuntimeId === runtimeId) {
-      binding.watchRuntimeId = null;
-    }
+    binding.watchRuntimeIds = binding.watchRuntimeIds.filter(id => id !== runtimeId);
+    this.syncWatchAlias(binding);
     delete binding.watchState[runtimeId];
     if (binding.defaultRuntimeId === runtimeId) {
       binding.defaultRuntimeId = null;
@@ -61,9 +67,10 @@ export class BindingStoreImpl {
     const binding = this.bindings.get(bindingId);
     if (!binding) return;
     binding.activeRuntimeId = runtimeId;
-    if (runtimeId && binding.watchRuntimeId === runtimeId) {
-      binding.watchRuntimeId = null;
+    if (runtimeId) {
+      binding.watchRuntimeIds = binding.watchRuntimeIds.filter(id => id !== runtimeId);
     }
+    this.syncWatchAlias(binding);
     if (runtimeId && binding.watchState[runtimeId]) {
       binding.watchState[runtimeId] = {
         ...binding.watchState[runtimeId],
@@ -76,17 +83,54 @@ export class BindingStoreImpl {
   setWatching(bindingId: string, runtimeId: string | null): void {
     const binding = this.bindings.get(bindingId);
     if (!binding) return;
-
-    binding.watchRuntimeId = runtimeId && runtimeId !== binding.activeRuntimeId
-      ? runtimeId
-      : null;
-
-    if (binding.watchRuntimeId) {
-      binding.watchState[binding.watchRuntimeId] = {
-        ...binding.watchState[binding.watchRuntimeId],
-        unreadCount: 0,
-      };
+    for (const watchedRuntimeId of binding.watchRuntimeIds) {
+      delete binding.watchState[watchedRuntimeId];
     }
+    binding.watchRuntimeIds = [];
+    this.syncWatchAlias(binding);
+    if (runtimeId) {
+      this.addWatching(bindingId, runtimeId);
+      return;
+    }
+    binding.lastActiveAt = Date.now();
+  }
+
+  addWatching(bindingId: string, runtimeId: string | null): void {
+    const binding = this.bindings.get(bindingId);
+    if (!binding || !runtimeId || runtimeId === binding.activeRuntimeId) return;
+
+    binding.watchRuntimeIds = binding.watchRuntimeIds.filter(id => id !== runtimeId);
+    binding.watchRuntimeIds.unshift(runtimeId);
+    this.syncWatchAlias(binding);
+
+    binding.watchState[runtimeId] = {
+      ...binding.watchState[runtimeId],
+      unreadCount: 0,
+    };
+
+    binding.lastActiveAt = Date.now();
+  }
+
+  removeWatching(bindingId: string, runtimeId: string): void {
+    const binding = this.bindings.get(bindingId);
+    if (!binding) return;
+
+    binding.watchRuntimeIds = binding.watchRuntimeIds.filter(id => id !== runtimeId);
+    this.syncWatchAlias(binding);
+    delete binding.watchState[runtimeId];
+
+    binding.lastActiveAt = Date.now();
+  }
+
+  clearWatching(bindingId: string): void {
+    const binding = this.bindings.get(bindingId);
+    if (!binding) return;
+
+    for (const runtimeId of binding.watchRuntimeIds) {
+      delete binding.watchState[runtimeId];
+    }
+    binding.watchRuntimeIds = [];
+    this.syncWatchAlias(binding);
 
     binding.lastActiveAt = Date.now();
   }
@@ -116,8 +160,12 @@ export class BindingStoreImpl {
       this.bindings.set(item.bindingId, {
         ...item,
         watchRuntimeId: item.watchRuntimeId ?? null,
+        watchRuntimeIds: item.watchRuntimeIds?.length
+          ? [...item.watchRuntimeIds]
+          : (item.watchRuntimeId ? [item.watchRuntimeId] : []),
         watchState: item.watchState ?? {},
       });
+      this.syncWatchAlias(this.bindings.get(item.bindingId)!);
     }
   }
 

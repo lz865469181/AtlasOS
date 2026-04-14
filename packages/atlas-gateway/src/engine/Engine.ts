@@ -11,7 +11,7 @@ import type { CardStateStoreImpl } from './CardStateStore.js';
 import type { MessageCorrelationStoreImpl } from './MessageCorrelationStore.js';
 import type { CardRenderPipeline } from './CardRenderPipeline.js';
 import type { CardEngineImpl } from './CardEngine.js';
-import type { CommandContext, CommandRegistryImpl } from './CommandRegistry.js';
+import type { CommandContext, CommandRegistryImpl, LocalRuntimeManager } from './CommandRegistry.js';
 import type { PermissionService } from './PermissionService.js';
 import type { IdleWatcher } from './IdleWatcher.js';
 import { buildWatchNotificationCard, parseWatchControlPayload } from './WatchControl.js';
@@ -37,6 +37,7 @@ export interface EngineDeps {
   commandRegistry: CommandRegistryImpl;
   permissionService: PermissionService;
   senderFactory: SenderFactory;
+  localRuntimeManager?: LocalRuntimeManager;
   defaultAgentId?: string;
   defaultPermissionMode?: string;
   idleWatcher?: IdleWatcher;
@@ -60,6 +61,7 @@ export class EngineImpl implements Engine {
   private readonly commandRegistry: CommandRegistryImpl;
   private readonly permissionService: PermissionService;
   private readonly senderFactory: SenderFactory;
+  private readonly localRuntimeManager?: LocalRuntimeManager;
   private readonly defaultAgentId?: string;
   private readonly defaultPermissionMode?: string;
   private readonly idleWatcher?: IdleWatcher;
@@ -74,6 +76,7 @@ export class EngineImpl implements Engine {
     this.commandRegistry = deps.commandRegistry;
     this.permissionService = deps.permissionService;
     this.senderFactory = deps.senderFactory;
+    this.localRuntimeManager = deps.localRuntimeManager;
     this.defaultAgentId = deps.defaultAgentId;
     this.defaultPermissionMode = deps.defaultPermissionMode;
     this.idleWatcher = deps.idleWatcher;
@@ -114,6 +117,7 @@ export class EngineImpl implements Engine {
           runtimeRegistry: this.runtimeRegistry,
           bindingStore: this.bindingStore,
           runtimeBridge: this.runtimeBridge,
+          localRuntimeManager: this.localRuntimeManager,
           defaultAgentId: this.defaultAgentId,
           defaultPermissionMode: this.defaultPermissionMode,
           sender,
@@ -172,7 +176,7 @@ export class EngineImpl implements Engine {
   }
 
   async handleRuntimeMessage(runtimeId: string, message: AgentMessage): Promise<void> {
-    const bindings = this.bindingStore.list().filter((binding) => binding.watchRuntimeId === runtimeId);
+    const bindings = this.bindingStore.list().filter((binding) => binding.watchRuntimeIds.includes(runtimeId));
 
     for (const binding of bindings) {
       const state = binding.watchState[runtimeId] ?? { unreadCount: 0 };
@@ -224,10 +228,9 @@ export class EngineImpl implements Engine {
     if (payload.action === 'focus') {
       const previousActiveId = binding.activeRuntimeId;
       this.bindingStore.setActive(binding.bindingId, payload.runtimeId);
-      this.bindingStore.setWatching(
-        binding.bindingId,
-        previousActiveId && previousActiveId !== payload.runtimeId ? previousActiveId : null,
-      );
+      if (previousActiveId && previousActiveId !== payload.runtimeId) {
+        this.bindingStore.addWatching(binding.bindingId, previousActiveId);
+      }
       return;
     }
 
@@ -244,8 +247,8 @@ export class EngineImpl implements Engine {
       ).then(() => undefined);
     }
 
-    if (binding.watchRuntimeId === payload.runtimeId) {
-      this.bindingStore.setWatching(binding.bindingId, null);
+    if (binding.watchRuntimeIds.includes(payload.runtimeId)) {
+      this.bindingStore.removeWatching(binding.bindingId, payload.runtimeId);
     }
   }
 

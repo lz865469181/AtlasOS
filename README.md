@@ -11,8 +11,8 @@ CodeLink uses a dual-layer model:
 
 That split lets `/new`, `/attach`, `/switch`, `/detach`, and `/sessions` behave cleanly without mixing transport state and chat state.
 
-Each thread now supports one primary interactive runtime plus one secondary watching runtime. The active runtime receives normal prompts and detailed output; the watching runtime is meant for status checks, completion awareness, and on-demand promotion back to active.
-Watching runtimes accumulate unread summaries and emit lightweight reminders for completion, error, and approval-needed events instead of streaming full output into the thread.
+Each thread now supports one primary interactive runtime plus multiple secondary watching runtimes. The active runtime receives normal prompts and detailed output; watching runtimes are meant for status checks, completion awareness, and on-demand promotion back to active.
+Watching runtimes accumulate unread summaries and emit lightweight reminders for completion, error, and approval-needed events instead of streaming full output into the thread. Watch cards include `Show Latest Output`, `Focus Runtime`, and `Stop Watching` so the thread can stay lightweight until you explicitly expand the latest captured output.
 
 ## Monorepo Layout
 
@@ -87,10 +87,11 @@ codelink.config.json -> atlas.config.json -> .env -> runtime overrides
 | `/status` | Show runtime provider, transport, model, mode, uptime, and runtime ID |
 | `/list` | List thread bindings and known runtimes in the current chat |
 | `/attach <name|id>` | Attach an existing runtime to this thread |
+| `/tmux [--provider claude|codex] [name]` | Start a local tmux-backed runtime from chat and attach this thread to it |
 | `/focus <number|name|id>` | Promote another attached runtime to active |
 | `/switch <number|name|id>` | Alias for `/focus` |
-| `/watch <number|name|id>` | Mark an attached runtime as the secondary watching runtime |
-| `/unwatch` | Clear the current watching runtime |
+| `/watch <number|name|id>` | Add an attached runtime to the watching set for this thread |
+| `/unwatch [number|name|id]` | Stop watching one runtime, or clear all watchers when no target is provided |
 | `/detach` | Detach the current runtime from this thread |
 | `/destroy <id|all>` | Destroy runtimes |
 | `/sessions` | List runtimes attached to this thread |
@@ -125,12 +126,19 @@ Behavior:
 - `start` creates a new detached tmux session, launches the selected CLI inside it, registers that session as an external runtime, and prints both the local `tmux attach` command and the chat `/attach` command.
 - `discover` lists local tmux sessions that can be adopted.
 - `adopt` registers an existing tmux session without creating or killing it.
+- Feishu can also create tmux-backed local runtimes directly from chat with `/tmux [--provider claude|codex] [name]`.
 - Feishu `/attach` and DingTalk `/attach` bind to that same tmux-backed runtime instead of shelling into `tmux attach`.
 - Re-adopting the same `provider + tmux session` reuses the existing runtime registration.
 
+Examples from chat:
+
+- `/tmux feature-lab` starts a local Claude Code tmux session and attaches the current thread to it.
+- `/tmux --provider codex spec-review` starts a local Codex tmux session and attaches the current thread to it.
+- Watch notification cards expose `Show Latest Output` when you want the most recent captured output without fully focusing that runtime.
+
 Current recommendation:
 
-- for local Claude Code / Codex workflows, prefer `codelink-runtime start|adopt` + chat `/attach`
+- for local Claude Code / Codex workflows, prefer `codelink-runtime start|adopt` + chat `/attach`, or start directly from Feishu with `/tmux`
 - treat managed Codex/Claude runtimes as a fallback or lightweight direct-start option
 
 The standalone helper binary is `codelink-runtime`. `atlas-runtime` remains available as a compatibility alias.

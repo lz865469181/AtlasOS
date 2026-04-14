@@ -192,7 +192,8 @@ describe('CommandRegistry', () => {
       expect(names).toContain('detach');
       expect(names).toContain('sessions');
       expect(names).toContain('destroy');
-      expect(commands).toHaveLength(15);
+      expect(names).toContain('tmux');
+      expect(commands).toHaveLength(16);
     });
 
     it('should include custom commands after registration', () => {
@@ -203,7 +204,7 @@ describe('CommandRegistry', () => {
       });
       const names = registry.listCommands().map((c) => c.name);
       expect(names).toContain('deploy');
-      expect(names).toHaveLength(16);
+      expect(names).toHaveLength(17);
     });
   });
 
@@ -235,6 +236,7 @@ describe('CommandRegistry', () => {
       expect(output as string).toContain('/focus');
       expect(output as string).toContain('/watch');
       expect(output as string).toContain('/unwatch');
+      expect(output as string).toContain('/tmux');
     });
   });
 
@@ -271,9 +273,16 @@ describe('CommandRegistry', () => {
       activeRuntimeId?: string | null;
       attachedRuntimeIds?: string[];
       watchRuntimeId?: string | null;
+      watchRuntimeIds?: string[];
       defaultAgentId?: string;
       defaultPermissionMode?: string;
-    }): Promise<CommandContext & { runtimeBridge: { cancel: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn> } }> {
+      localRuntimeManager?: {
+        startTmuxRuntime: ReturnType<typeof vi.fn>;
+      };
+    }): Promise<CommandContext & {
+      runtimeBridge: { cancel: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn> };
+      localRuntimeManager: { startTmuxRuntime: ReturnType<typeof vi.fn> };
+    }> {
       const runtimeRegistry = new RuntimeRegistryImpl();
       const bindingStore = new BindingStoreImpl();
       const binding = bindingStore.getOrCreate('feishu', 'chat-1', 'chat-1');
@@ -296,6 +305,9 @@ describe('CommandRegistry', () => {
       if (overrides?.watchRuntimeId !== undefined) {
         bindingStore.setWatching(binding.bindingId, overrides.watchRuntimeId);
       }
+      for (const runtimeId of overrides?.watchRuntimeIds ?? []) {
+        bindingStore.addWatching(binding.bindingId, runtimeId);
+      }
 
       const runtimeBridge = {
         sendPrompt: vi.fn(),
@@ -303,12 +315,52 @@ describe('CommandRegistry', () => {
         respondToPermission: vi.fn().mockResolvedValue(undefined),
         dispose: vi.fn().mockResolvedValue(undefined),
       };
+      const localRuntimeManager = overrides?.localRuntimeManager ?? {
+        startTmuxRuntime: vi.fn().mockImplementation(async ({
+          provider,
+          name,
+        }: {
+          provider: 'claude' | 'codex';
+          name: string;
+        }) => {
+          const sessionName = `codelink-${name || provider}`;
+          const runtime: RuntimeSession = makeRuntime({
+            id: `runtime-tmux-${provider}-1`,
+            displayName: name || `${provider}-tmux`,
+            provider,
+            source: 'external',
+            transport: 'tmux',
+            capabilities: {
+              streaming: true,
+              permissionCards: false,
+              fileAccess: true,
+              imageInput: false,
+              terminalOutput: true,
+              patchEvents: false,
+            },
+            resumeHandle: { kind: 'tmux-session', value: sessionName },
+            metadata: {
+              agentId: provider,
+              permissionMode: 'auto',
+              tmuxSessionName: sessionName,
+              tmuxTarget: `${sessionName}:0.0`,
+            },
+          });
+          await runtimeRegistry.registerExternal(runtime);
+          return {
+            runtime,
+            sessionName,
+            tmuxTarget: `${sessionName}:0.0`,
+          };
+        }),
+      };
 
       return {
         binding,
         runtimeRegistry,
         bindingStore,
         runtimeBridge: runtimeBridge as never,
+        localRuntimeManager,
         defaultAgentId: overrides?.defaultAgentId,
         defaultPermissionMode: overrides?.defaultPermissionMode,
         sender: {
@@ -316,7 +368,10 @@ describe('CommandRegistry', () => {
           sendCard: vi.fn().mockResolvedValue(undefined),
           updateCard: vi.fn().mockResolvedValue(undefined),
         } as unknown as ChannelSender,
-      } as CommandContext & { runtimeBridge: { cancel: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn> } };
+      } as CommandContext & {
+        runtimeBridge: { cancel: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn> };
+        localRuntimeManager: { startTmuxRuntime: ReturnType<typeof vi.fn> };
+      };
     }
 
     it('/cancel calls runtimeBridge.cancel', async () => {
@@ -394,6 +449,50 @@ describe('CommandRegistry', () => {
       const result = registry.resolve('/status');
       const output = await result!.command.execute('', ctx);
       expect(output).toContain('Watching: lab [claude/tmux] - running');
+    });
+
+    it('/status includes multiple watching runtimes when present', async () => {
+      const ctx = await makeContext({
+        runtimes: [
+          makeRuntime({ id: 'runtime-sdk-1', displayName: 'main' }),
+          makeRuntime({
+            id: 'runtime-watch-1',
+            displayName: 'lab',
+            status: 'running',
+            transport: 'tmux',
+            source: 'external',
+            capabilities: {
+              streaming: true,
+              permissionCards: false,
+              fileAccess: true,
+              imageInput: false,
+              terminalOutput: true,
+              patchEvents: false,
+            },
+          }),
+          makeRuntime({
+            id: 'runtime-watch-2',
+            displayName: 'ops',
+            status: 'idle',
+            transport: 'tmux',
+            source: 'external',
+            capabilities: {
+              streaming: true,
+              permissionCards: false,
+              fileAccess: true,
+              imageInput: false,
+              terminalOutput: true,
+              patchEvents: false,
+            },
+          }),
+        ],
+        activeRuntimeId: 'runtime-sdk-1',
+        watchRuntimeIds: ['runtime-watch-1', 'runtime-watch-2'],
+      });
+      const result = registry.resolve('/status');
+      const output = await result!.command.execute('', ctx);
+      expect(output).toContain('Watching: lab [claude/tmux] - running');
+      expect(output).toContain('Watching: ops [claude/tmux] - idle');
     });
 
     it('/status with no active runtime', async () => {
@@ -624,6 +723,60 @@ describe('CommandRegistry', () => {
       expect(output).toContain('Watching: **lab** [claude/tmux]');
     });
 
+    it('/sessions lists multiple watching runtimes separately', async () => {
+      const ctx = await makeContext({
+        runtimes: [
+          makeRuntime({ id: 'runtime-a', displayName: 'main' }),
+          makeRuntime({
+            id: 'runtime-b',
+            displayName: 'lab',
+            transport: 'tmux',
+            source: 'external',
+            capabilities: {
+              streaming: true,
+              permissionCards: false,
+              fileAccess: true,
+              imageInput: false,
+              terminalOutput: true,
+              patchEvents: false,
+            },
+          }),
+          makeRuntime({
+            id: 'runtime-c',
+            displayName: 'ops',
+            transport: 'tmux',
+            source: 'external',
+            capabilities: {
+              streaming: true,
+              permissionCards: false,
+              fileAccess: true,
+              imageInput: false,
+              terminalOutput: true,
+              patchEvents: false,
+            },
+          }),
+        ],
+        activeRuntimeId: 'runtime-a',
+        watchRuntimeIds: ['runtime-b', 'runtime-c'],
+      });
+      ctx.binding.watchState['runtime-b'] = {
+        unreadCount: 2,
+        lastStatus: 'running',
+        lastSummary: 'npm test failed',
+      };
+      ctx.binding.watchState['runtime-c'] = {
+        unreadCount: 1,
+        lastStatus: 'idle',
+        lastSummary: 'done',
+      };
+
+      const result = registry.resolve('/sessions');
+      const output = await result!.command.execute('', ctx);
+
+      expect(output).toContain('Watching 1: **ops** [claude/tmux] - unread 1 - idle - done');
+      expect(output).toContain('Watching 2: **lab** [claude/tmux] - unread 2 - running - npm test failed');
+    });
+
     it('/sessions shows unread watch state when available', async () => {
       const ctx = await makeContext({
         runtimes: [
@@ -666,6 +819,24 @@ describe('CommandRegistry', () => {
       expect(output).toContain('Watching **lab**');
     });
 
+    it('/watch can add multiple watching runtimes without replacing existing ones', async () => {
+      const ctx = await makeContext({
+        runtimes: [
+          makeRuntime({ id: 'runtime-a', displayName: 'main' }),
+          makeRuntime({ id: 'runtime-b', displayName: 'lab' }),
+          makeRuntime({ id: 'runtime-c', displayName: 'ops' }),
+        ],
+        activeRuntimeId: 'runtime-a',
+        watchRuntimeIds: ['runtime-b'],
+      });
+      const result = registry.resolve('/watch');
+      const output = await result!.command.execute('ops', ctx);
+
+      expect(ctx.binding.watchRuntimeIds).toEqual(['runtime-c', 'runtime-b']);
+      expect(ctx.binding.watchRuntimeId).toBe('runtime-c');
+      expect(output).toContain('Watching **ops**');
+    });
+
     it('/watch rejects the active runtime', async () => {
       const ctx = await makeContext({
         runtimes: [makeRuntime({ id: 'runtime-a', displayName: 'main' })],
@@ -694,6 +865,24 @@ describe('CommandRegistry', () => {
       expect(output).toContain('Focused **lab**');
     });
 
+    it('/focus preserves the other watching runtimes when promoting one of them', async () => {
+      const ctx = await makeContext({
+        runtimes: [
+          makeRuntime({ id: 'runtime-a', displayName: 'main' }),
+          makeRuntime({ id: 'runtime-b', displayName: 'lab' }),
+          makeRuntime({ id: 'runtime-c', displayName: 'ops' }),
+        ],
+        activeRuntimeId: 'runtime-a',
+        watchRuntimeIds: ['runtime-b', 'runtime-c'],
+      });
+      const result = registry.resolve('/focus');
+      const output = await result!.command.execute('lab', ctx);
+
+      expect(ctx.binding.activeRuntimeId).toBe('runtime-b');
+      expect(ctx.binding.watchRuntimeIds).toEqual(['runtime-a', 'runtime-c']);
+      expect(output).toContain('Focused **lab**');
+    });
+
     it('/switch resolves to the focus command', () => {
       const result = registry.resolve('/switch lab');
       expect(result).not.toBeNull();
@@ -714,6 +903,24 @@ describe('CommandRegistry', () => {
       const output = await result!.command.execute('', ctx);
 
       expect(ctx.binding.watchRuntimeId).toBeNull();
+      expect(output).toContain('Stopped watching **lab**');
+    });
+
+    it('/unwatch can remove one watching runtime while keeping the others', async () => {
+      const ctx = await makeContext({
+        runtimes: [
+          makeRuntime({ id: 'runtime-a', displayName: 'main' }),
+          makeRuntime({ id: 'runtime-b', displayName: 'lab' }),
+          makeRuntime({ id: 'runtime-c', displayName: 'ops' }),
+        ],
+        activeRuntimeId: 'runtime-a',
+        watchRuntimeIds: ['runtime-b', 'runtime-c'],
+      });
+      const result = registry.resolve('/unwatch');
+      const output = await result!.command.execute('lab', ctx);
+
+      expect(ctx.binding.watchRuntimeIds).toEqual(['runtime-c']);
+      expect(ctx.binding.watchRuntimeId).toBe('runtime-c');
       expect(output).toContain('Stopped watching **lab**');
     });
 
@@ -770,6 +977,89 @@ describe('CommandRegistry', () => {
 
       expect(output).toContain('active: main [claude/sdk]');
       expect(output).toContain('watching: lab [claude/tmux]');
+    });
+
+    it('/list shows multiple watching runtimes on the binding summary', async () => {
+      const ctx = await makeContext({
+        runtimes: [
+          makeRuntime({ id: 'runtime-a', displayName: 'main' }),
+          makeRuntime({
+            id: 'runtime-b',
+            displayName: 'lab',
+            transport: 'tmux',
+            source: 'external',
+            capabilities: {
+              streaming: true,
+              permissionCards: false,
+              fileAccess: true,
+              imageInput: false,
+              terminalOutput: true,
+              patchEvents: false,
+            },
+          }),
+          makeRuntime({
+            id: 'runtime-c',
+            displayName: 'ops',
+            transport: 'tmux',
+            source: 'external',
+            capabilities: {
+              streaming: true,
+              permissionCards: false,
+              fileAccess: true,
+              imageInput: false,
+              terminalOutput: true,
+              patchEvents: false,
+            },
+          }),
+        ],
+        activeRuntimeId: 'runtime-a',
+        watchRuntimeIds: ['runtime-b', 'runtime-c'],
+      });
+      const result = registry.resolve('/list');
+      const output = await result!.command.execute('', ctx);
+
+      expect(output).toContain('active: main [claude/sdk]');
+      expect(output).toContain('watching: ops [claude/tmux], lab [claude/tmux]');
+    });
+
+    it('/tmux starts a tmux-backed runtime from chat and attaches the thread to it', async () => {
+      const ctx = await makeContext({
+        runtimes: [makeRuntime({ id: 'runtime-a', displayName: 'main' })],
+        activeRuntimeId: 'runtime-a',
+      });
+      const result = registry.resolve('/tmux');
+      const output = await result!.command.execute('feature-lab', ctx);
+
+      expect(ctx.localRuntimeManager.startTmuxRuntime).toHaveBeenCalledWith({
+        provider: 'claude',
+        name: 'feature-lab',
+        binding: expect.objectContaining({ bindingId: ctx.binding.bindingId }),
+      });
+      expect(ctx.binding.activeRuntimeId).toBe('runtime-tmux-claude-1');
+      expect(ctx.runtimeRegistry.get('runtime-tmux-claude-1')).toMatchObject({
+        displayName: 'feature-lab',
+        provider: 'claude',
+        transport: 'tmux',
+      });
+      expect(output).toContain('Started tmux runtime: feature-lab [claude/tmux]');
+      expect(output).toContain('tmux attach -t codelink-feature-lab');
+    });
+
+    it('/tmux supports starting a codex tmux runtime from chat', async () => {
+      const ctx = await makeContext({
+        runtimes: [makeRuntime({ id: 'runtime-a', displayName: 'main' })],
+        activeRuntimeId: 'runtime-a',
+      });
+      const result = registry.resolve('/tmux');
+      const output = await result!.command.execute('--provider codex spec-review', ctx);
+
+      expect(ctx.localRuntimeManager.startTmuxRuntime).toHaveBeenCalledWith({
+        provider: 'codex',
+        name: 'spec-review',
+        binding: expect.objectContaining({ bindingId: ctx.binding.bindingId }),
+      });
+      expect(ctx.binding.activeRuntimeId).toBe('runtime-tmux-codex-1');
+      expect(output).toContain('Started tmux runtime: spec-review [codex/tmux]');
     });
   });
 

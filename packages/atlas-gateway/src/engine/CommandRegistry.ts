@@ -1,15 +1,28 @@
 import type { CardModel } from '../cards/CardModel.js';
 import type { ChannelSender } from '../channel/ChannelSender.js';
-import type { ConversationBinding } from '../runtime/RuntimeModels.js';
+import type { ConversationBinding, RuntimeSession } from '../runtime/RuntimeModels.js';
 import type { BindingStoreImpl } from '../runtime/BindingStore.js';
 import type { RuntimeRegistryImpl } from '../runtime/RuntimeRegistry.js';
 import type { RuntimeBridgeImpl } from '../runtime/RuntimeBridge.js';
+
+export interface LocalRuntimeManager {
+  startTmuxRuntime(opts: {
+    provider: 'claude' | 'codex';
+    name: string;
+    binding: ConversationBinding;
+  }): Promise<{
+    runtime: RuntimeSession;
+    sessionName: string;
+    tmuxTarget: string;
+  }>;
+}
 
 export interface CommandContext {
   binding: ConversationBinding;
   runtimeRegistry: RuntimeRegistryImpl;
   bindingStore: BindingStoreImpl;
   runtimeBridge: RuntimeBridgeImpl;
+  localRuntimeManager?: LocalRuntimeManager;
   defaultAgentId?: string;
   defaultPermissionMode?: string;
   sender: ChannelSender;
@@ -42,13 +55,14 @@ import { UnwatchCommand } from './commands/UnwatchCommand.js';
 import { DetachCommand } from './commands/DetachCommand.js';
 import { SessionsCommand } from './commands/SessionsCommand.js';
 import { DestroyCommand } from './commands/DestroyCommand.js';
+import { TmuxCommand } from './commands/TmuxCommand.js';
 
 const helpCommand: Command = {
   name: 'help',
   aliases: ['h', '?'],
   description: 'Show available commands.',
   execute: async () =>
-    'Available commands: /agent, /model, /mode, /cancel, /status, /new, /destroy, /list, /attach, /focus, /watch, /unwatch, /detach, /sessions, /help',
+    'Available commands: /agent, /model, /mode, /cancel, /status, /new, /tmux, /destroy, /list, /attach, /focus, /watch, /unwatch, /detach, /sessions, /help',
 };
 
 const builtinCommands: Command[] = [
@@ -58,6 +72,7 @@ const builtinCommands: Command[] = [
   CancelCommand,
   StatusCommand,
   NewCommand,
+  TmuxCommand,
   ListCommand,
   AttachCommand,
   FocusCommand,

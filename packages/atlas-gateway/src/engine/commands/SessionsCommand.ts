@@ -12,9 +12,7 @@ export const SessionsCommand: Command = {
     const activeRuntime = context.binding.activeRuntimeId
       ? context.runtimeRegistry.get(context.binding.activeRuntimeId)
       : undefined;
-    const watchRuntime = context.binding.watchRuntimeId
-      ? context.runtimeRegistry.get(context.binding.watchRuntimeId)
-      : undefined;
+    const watchRuntimeIds = context.binding.watchRuntimeIds;
 
     lines.push(`**Thread Runtime Roles**\n`);
 
@@ -25,7 +23,17 @@ export const SessionsCommand: Command = {
       lines.push('Active: (none)');
     }
 
-    if (watchRuntime) {
+    if (watchRuntimeIds.length === 0) {
+      lines.push('Watching: (none)');
+    }
+
+    for (let i = 0; i < watchRuntimeIds.length; i += 1) {
+      const watchRuntimeId = watchRuntimeIds[i];
+      const watchRuntime = context.runtimeRegistry.get(watchRuntimeId);
+      if (!watchRuntime) {
+        lines.push(`Watching ${i + 1}: ~~${watchRuntimeId.slice(0, 8)}~~ (gone)`);
+        continue;
+      }
       const label = watchRuntime.displayName ?? watchRuntime.id.slice(0, 8);
       const watchState = context.binding.watchState[watchRuntime.id];
       const details = [
@@ -34,11 +42,12 @@ export const SessionsCommand: Command = {
         watchState?.lastSummary ?? null,
       ].filter((item): item is string => Boolean(item));
       const suffix = details.length > 0 ? ` - ${details.join(' - ')}` : '';
-      lines.push(`Watching: **${label}** [${watchRuntime.provider}/${watchRuntime.transport}]${suffix}`);
+      const prefix = watchRuntimeIds.length === 1 ? 'Watching' : `Watching ${i + 1}`;
+      lines.push(`${prefix}: **${label}** [${watchRuntime.provider}/${watchRuntime.transport}]${suffix}`);
     }
 
     const secondaryRuntimeIds = context.binding.attachedRuntimeIds.filter(
-      (runtimeId) => runtimeId !== context.binding.activeRuntimeId && runtimeId !== context.binding.watchRuntimeId,
+      (runtimeId) => runtimeId !== context.binding.activeRuntimeId && !watchRuntimeIds.includes(runtimeId),
     );
 
     if (secondaryRuntimeIds.length > 0) {
