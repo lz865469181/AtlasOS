@@ -108,6 +108,7 @@ Managed runtimes still exist as a supplement:
 - use managed runtimes when you want CodeLink to create an SDK-driven runtime directly
 
 tmux is still optional for the base service. Install it when you want to bridge an already-running local Claude Code or Codex session into Feishu/DingTalk.
+If `tmux` is missing locally, `/tmux` and `codelink-runtime start|discover|adopt` now return explicit install guidance instead of only exposing the raw spawn error.
 
 Examples:
 

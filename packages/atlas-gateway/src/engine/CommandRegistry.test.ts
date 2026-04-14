@@ -1061,6 +1061,24 @@ describe('CommandRegistry', () => {
       expect(ctx.binding.activeRuntimeId).toBe('runtime-tmux-codex-1');
       expect(output).toContain('Started tmux runtime: spec-review [codex/tmux]');
     });
+
+    it('/tmux returns install guidance when tmux is missing locally', async () => {
+      const ctx = await makeContext({
+        localRuntimeManager: {
+          startTmuxRuntime: vi.fn().mockRejectedValue(Object.assign(
+            new Error('spawn tmux ENOENT'),
+            { code: 'ENOENT' },
+          )),
+        },
+      });
+      const result = registry.resolve('/tmux');
+      const output = await result!.command.execute('feature-lab', ctx);
+
+      expect(output).toContain('tmux is not installed or not reachable');
+      expect(output).toContain('brew install tmux');
+      expect(output).toContain('apt-get install tmux');
+      expect(output).toContain('CODELINK_TMUX_BIN');
+    });
   });
 
   describe('prefix match deduplication', () => {

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { formatTmuxCommandError } from 'codelink-gateway';
 import { adoptTmuxRuntime, discoverTmuxSessions, findExistingTmuxRuntime, launchTmuxRuntime } from './runtimeLauncher.js';
 
 const SERVER_URL =
@@ -122,7 +123,7 @@ async function cmdStart(args: string[]): Promise<void> {
     console.log(`attach locally: ${tmuxBin} attach -t ${launched.sessionName}`);
     console.log(`attach from chat: /attach ${launched.runtimeId.slice(0, 8)}`);
   } catch (err) {
-    console.error(`Failed to start tmux runtime: ${err}`);
+    console.error(formatTmuxCommandError('start a tmux runtime', err, tmuxBin));
     process.exit(1);
   }
 }
@@ -157,7 +158,7 @@ async function cmdDiscover(): Promise<void> {
       console.log(`    adopt as Codex:  codelink-runtime adopt --provider codex ${session.sessionName}`);
     }
   } catch (err) {
-    console.error(`Failed to discover tmux sessions: ${err}`);
+    console.error(formatTmuxCommandError('discover tmux sessions', err, tmuxBin));
     process.exit(1);
   }
 }
@@ -210,7 +211,7 @@ async function cmdAdopt(args: string[]): Promise<void> {
     console.log(`attach locally: ${tmuxBin} attach -t ${adopted.sessionName}`);
     console.log(`attach from chat: /attach ${adopted.runtimeId.slice(0, 8)}`);
   } catch (err) {
-    console.error(`Failed to adopt tmux session: ${err}`);
+    console.error(formatTmuxCommandError('adopt a tmux session', err, tmuxBin));
     process.exit(1);
   }
 }

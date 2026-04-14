@@ -121,6 +121,8 @@ Requirements:
 - Claude CLI installed and reachable as `claude`, or set `CLAUDE_CLI_PATH`
 - Codex CLI installed and reachable as `codex`, or set `CODEX_CLI_PATH`
 
+If tmux is missing, CodeLink now returns an explicit install hint when you use `/tmux` or `codelink-runtime start|discover|adopt`, including `brew install tmux`, `apt-get install tmux`, and the `CODELINK_TMUX_BIN` override path.
+
 Useful variables:
 
 ```bash

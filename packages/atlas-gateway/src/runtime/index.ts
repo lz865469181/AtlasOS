@@ -5,6 +5,7 @@ export * from './RuntimeAdapter.js';
 export * from './RuntimeBridge.js';
 export * from './RuntimeRouter.js';
 export * from './RuntimeSpecs.js';
+export * from './TmuxDependency.js';
 export * from './adapters/AtlasClaudeRuntimeAdapter.js';
 export * from './adapters/ExternalRuntimeAdapter.js';
 export * from './adapters/TmuxRuntimeAdapter.js';

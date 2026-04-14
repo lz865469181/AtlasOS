@@ -1,4 +1,5 @@
 import type { Command, CommandContext } from '../CommandRegistry.js';
+import { formatTmuxCommandError } from '../../runtime/TmuxDependency.js';
 
 function parseTmuxArgs(args: string): { provider: 'claude' | 'codex'; name: string } | null {
   const tokens = args.trim().split(/\s+/).filter(Boolean);
@@ -45,11 +46,21 @@ export const TmuxCommand: Command = {
       return 'Usage: /tmux [--provider claude|codex] [name]';
     }
 
-    const started = await context.localRuntimeManager.startTmuxRuntime({
-      provider: parsed.provider,
-      name: parsed.name,
-      binding: context.binding,
-    });
+    let started;
+    try {
+      started = await context.localRuntimeManager.startTmuxRuntime({
+        provider: parsed.provider,
+        name: parsed.name,
+        binding: context.binding,
+      });
+    } catch (error) {
+      const tmuxBin =
+        process.env.CODELINK_TMUX_BIN
+        ?? process.env.ATLAS_TMUX_BIN
+        ?? process.env.TMUX_BIN
+        ?? 'tmux';
+      return formatTmuxCommandError('start a tmux runtime', error, tmuxBin);
+    }
 
     context.bindingStore.attach(context.binding.bindingId, started.runtime.id);
     context.bindingStore.setActive(context.binding.bindingId, started.runtime.id);

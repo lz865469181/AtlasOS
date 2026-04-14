@@ -5,6 +5,7 @@ import type { CardEngineImpl } from '../../engine/CardEngine.js';
 import type { RuntimeAdapter, RuntimePrompt } from '../RuntimeAdapter.js';
 import type { RuntimeSession } from '../RuntimeModels.js';
 import type { RuntimeRegistryImpl } from '../RuntimeRegistry.js';
+import { formatTmuxCommandError } from '../TmuxDependency.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -36,7 +37,11 @@ function defaultCommandRunner(args: string[]): Promise<string> {
   return execFileAsync(tmuxBin, args, {
     windowsHide: true,
     maxBuffer: 1024 * 1024 * 8,
-  }).then(({ stdout }) => stdout);
+  })
+    .then(({ stdout }) => stdout)
+    .catch((error) => {
+      throw new Error(formatTmuxCommandError('run a tmux command', error, tmuxBin));
+    });
 }
 
 function captureDelta(previous: string, current: string): string {
