@@ -4,7 +4,7 @@ import type { CardActionEvent, EngineDeps } from './Engine.js';
 import type { ChannelEvent } from '../channel/channelEvent.js';
 import type { ChannelSender, SenderFactory } from '../channel/ChannelSender.js';
 import type { CardModel } from '../cards/CardModel.js';
-import type { CardStateStoreImpl } from './CardStateStore.js';
+import { CardStateStoreImpl } from './CardStateStore.js';
 import type { MessageCorrelationStoreImpl } from './MessageCorrelationStore.js';
 import type { CardRenderPipeline } from './CardRenderPipeline.js';
 import type { CardEngineImpl } from './CardEngine.js';
@@ -359,7 +359,8 @@ describe('Engine', () => {
             status: 'done',
           }),
           actions: expect.arrayContaining([
-            expect.objectContaining({ label: 'Show Latest Output' }),
+            expect.objectContaining({ label: 'Latest' }),
+            expect.objectContaining({ label: 'Status' }),
             expect.objectContaining({ label: 'Focus Runtime' }),
             expect.objectContaining({ label: 'Stop Watching' }),
           ]),
@@ -405,7 +406,8 @@ describe('Engine', () => {
             status: 'waiting',
           }),
           actions: expect.arrayContaining([
-            expect.objectContaining({ label: 'Show Latest Output' }),
+            expect.objectContaining({ label: 'Latest' }),
+            expect.objectContaining({ label: 'Status' }),
             expect.objectContaining({ label: 'Focus Runtime' }),
             expect.objectContaining({ label: 'Stop Watching' }),
           ]),
@@ -516,7 +518,7 @@ describe('Engine', () => {
       expect(permissionService.handleAction).not.toHaveBeenCalled();
     });
 
-    it('show-latest-output action replies with the latest output preview', async () => {
+    it('view-status action patches the watching card into status view', async () => {
       const { factory, lastSender } = mockSenderFactory();
       const bindingStore = new BindingStoreImpl();
       const binding = bindingStore.getOrCreate('ch-1', 'chat-1', 'chat-1');
@@ -552,17 +554,58 @@ describe('Engine', () => {
         value: {
           v: 1,
           kind: 'watch-control',
-          action: 'show-latest-output',
+          action: 'view-status',
           bindingId: binding.bindingId,
           runtimeId: 'runtime-watch',
         },
       });
 
-      expect(lastSender().sendMarkdown).toHaveBeenCalledWith(
-        expect.stringContaining('step 1\nstep 2\nstep 3'),
-        undefined,
+      expect(lastSender().updateCard).toHaveBeenCalledWith(
+        'msg-card-1',
+        expect.objectContaining({
+          actions: expect.arrayContaining([
+            expect.objectContaining({ label: 'Latest' }),
+            expect.objectContaining({ label: 'Status', style: 'primary' }),
+          ]),
+        }),
       );
       expect(permissionService.handleAction).not.toHaveBeenCalled();
+    });
+
+    it('card-view action patches an active card in place', async () => {
+      const stateStore = new CardStateStoreImpl({ maxRenderRateMs: 0, coalesceWindowMs: 0 });
+      const created = stateStore.create('chat-1', 'streaming', {
+        header: { title: 'Thinking...', status: 'running' },
+        sections: [{ type: 'markdown', content: 'hello' }],
+        actions: [],
+      });
+      created.metadata['activeCardKind'] = 'streaming';
+      created.metadata['streamFullText'] = 'hello';
+      created.metadata['streamLastSummary'] = 'hello';
+      created.metadata['selectedView'] = 'latest';
+      stateStore.setMessageId(created.cardId, 'msg-active-1');
+
+      deps = createDeps({
+        cardStore: stateStore as never,
+      });
+      engine = new EngineImpl(deps);
+
+      await engine.handleCardAction({
+        messageId: 'msg-active-1',
+        chatId: 'chat-1',
+        userId: 'user-1',
+        value: {
+          v: 1,
+          kind: 'card-view',
+          view: 'status',
+        },
+      });
+
+      const updated = stateStore.get(created.cardId);
+      expect(updated?.content.actions).toEqual(expect.arrayContaining([
+        expect.objectContaining({ label: 'Latest' }),
+        expect.objectContaining({ label: 'Status', style: 'primary' }),
+      ]));
     });
   });
 });

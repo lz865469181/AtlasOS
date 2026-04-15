@@ -3,9 +3,11 @@ import type { Server } from 'node:http';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
+import path from 'node:path';
 import { agentRegistry } from 'codelink-agent';
 import type { AgentMessage } from 'codelink-agent';
-import { launchTmuxRuntime } from './runtimeLauncher.js';
+import { adoptTmuxRuntime, discoverTmuxSessions, findExistingTmuxRuntime, launchTmuxRuntime } from './runtimeLauncher.js';
+import { materializeFeishuAttachmentPrompt } from './feishuAttachmentMaterializer.js';
 import {
   BindingStoreImpl,
   CardEngineImpl,
@@ -244,6 +246,22 @@ export function createApp(config: AppConfig | CodeLinkConfig | AtlasConfig): App
         return managedAdapter;
       },
     },
+    materializePrompt: async (runtime, event) => {
+      if (event.content.type !== 'file' && event.content.type !== 'image') {
+        return null;
+      }
+
+      const baseCwd = runtime.metadata.cwd
+        || process.env.CODELINK_RUNTIME_CWD
+        || process.env.ATLAS_RUNTIME_CWD
+        || normalized.agentCwd;
+      const uploadRoot = path.join(baseCwd, '.codelink', 'uploads');
+
+      return materializeFeishuAttachmentPrompt(runtime, event, {
+        larkClient,
+        uploadRoot,
+      });
+    },
   });
 
   const permissionService = new PermissionService({
@@ -253,7 +271,7 @@ export function createApp(config: AppConfig | CodeLinkConfig | AtlasConfig): App
   });
 
   const localRuntimeManager: LocalRuntimeManager = {
-    startTmuxRuntime: async ({ provider, name }) => {
+    startTmuxRuntime: async ({ provider, name, displayName, sessionName }) => {
       const tmuxBin =
         process.env.CODELINK_TMUX_BIN
         ?? process.env.ATLAS_TMUX_BIN
@@ -269,6 +287,8 @@ export function createApp(config: AppConfig | CodeLinkConfig | AtlasConfig): App
       const launched = await launchTmuxRuntime({
         provider,
         name,
+        displayName,
+        sessionName,
         cwd,
         cliPath,
         serverUrl: 'local://createApp',
@@ -302,6 +322,99 @@ export function createApp(config: AppConfig | CodeLinkConfig | AtlasConfig): App
         runtime: registeredRuntime,
         sessionName: launched.sessionName,
         tmuxTarget: launched.tmuxTarget,
+      };
+    },
+    discoverTmuxSessions: async () => {
+      const tmuxBin =
+        process.env.CODELINK_TMUX_BIN
+        ?? process.env.ATLAS_TMUX_BIN
+        ?? process.env.TMUX_BIN
+        ?? 'tmux';
+      const sessions = await discoverTmuxSessions({
+        runCommand: async (args) => {
+          const { stdout } = await execFileAsync(tmuxBin, args, {
+            windowsHide: true,
+            maxBuffer: 1024 * 1024 * 4,
+          });
+          return stdout;
+        },
+      });
+
+      const externalRuntimes = runtimeRegistry.list().filter((runtime) => runtime.source === 'external');
+      return sessions.map((session) => ({
+        sessionName: session.sessionName,
+        registeredRuntime: (() => {
+          const existing = findExistingTmuxRuntime(externalRuntimes, {
+            provider: 'claude',
+            sessionName: session.sessionName,
+          }) ?? findExistingTmuxRuntime(externalRuntimes, {
+            provider: 'codex',
+            sessionName: session.sessionName,
+          });
+          return existing ? runtimeRegistry.get(existing.id) ?? null : null;
+        })(),
+      }));
+    },
+    adoptTmuxRuntime: async ({ provider, sessionName, displayName }) => {
+      const tmuxBin =
+        process.env.CODELINK_TMUX_BIN
+        ?? process.env.ATLAS_TMUX_BIN
+        ?? process.env.TMUX_BIN
+        ?? 'tmux';
+      const existing = findExistingTmuxRuntime(
+        runtimeRegistry.list().filter((runtime) => runtime.source === 'external'),
+        { provider, sessionName },
+      );
+      if (existing) {
+        const runtime = runtimeRegistry.get(existing.id);
+        if (!runtime) {
+          throw new Error(`Existing runtime disappeared: ${existing.id}`);
+        }
+        return {
+          runtime,
+          sessionName,
+          tmuxTarget: runtime.metadata.tmuxTarget || `${sessionName}:0.0`,
+          reused: true,
+        };
+      }
+
+      let registeredRuntime: RuntimeSession | null = null;
+      const adopted = await adoptTmuxRuntime({
+        provider,
+        sessionName,
+        displayName,
+        serverUrl: 'local://createApp',
+      }, {
+        runCommand: async (args) => {
+          const { stdout } = await execFileAsync(tmuxBin, args, {
+            windowsHide: true,
+            maxBuffer: 1024 * 1024 * 4,
+          });
+          return stdout;
+        },
+        registerRuntime: async (payload) => {
+          registeredRuntime = await registerExternalRuntime({
+            runtimeId: payload.runtimeId,
+            source: payload.source,
+            provider: payload.provider,
+            transport: payload.transport,
+            displayName: payload.displayName,
+            resumeHandle: payload.resumeHandle,
+            capabilities: payload.capabilities,
+            metadata: payload.metadata,
+          });
+        },
+      });
+
+      if (!registeredRuntime) {
+        throw new Error('tmux runtime adoption did not complete');
+      }
+
+      return {
+        runtime: registeredRuntime,
+        sessionName: adopted.sessionName,
+        tmuxTarget: adopted.tmuxTarget,
+        reused: false,
       };
     },
   };

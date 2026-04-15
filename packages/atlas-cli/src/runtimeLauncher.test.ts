@@ -131,6 +131,17 @@ describe('launchTmuxRuntime', () => {
     ]);
   });
 
+  it('normalizes psmux list-sessions fallback output to bare session names', async () => {
+    const sessions = await discoverTmuxSessions({
+      runCommand: vi.fn(async () => 'claude-main: 1 windows (created Tue Apr 14 17:34:11 2026)\ncodex-lab: 2 windows (created Tue Apr 14 17:34:12 2026)\n'),
+    });
+
+    expect(sessions).toEqual([
+      { sessionName: 'claude-main' },
+      { sessionName: 'codex-lab' },
+    ]);
+  });
+
   it('adopts an existing tmux session without marking it managed', async () => {
     const runCommand = vi.fn(async (args: string[]) => {
       if (args[0] === 'display-message') {

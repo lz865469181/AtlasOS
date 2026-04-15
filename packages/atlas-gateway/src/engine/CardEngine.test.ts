@@ -72,6 +72,10 @@ describe('CardEngine', () => {
       expect(card).toBeDefined();
       expect(card!.type).toBe('streaming');
       expect(card!.chatId).toBe(CHAT);
+      expect(card!.content.actions).toEqual(expect.arrayContaining([
+        expect.objectContaining({ label: 'Latest', style: 'primary' }),
+        expect.objectContaining({ label: 'Status' }),
+      ]));
     });
 
     it('reuses existing streaming SM for same session', () => {
@@ -124,7 +128,10 @@ describe('CardEngine', () => {
       expect(statusCard).toBeDefined();
       expect(statusCard!.content.header?.title).toBe('Status: running');
       expect(statusCard!.content.header?.status).toBe('running');
-      expect(statusCard!.content.sections).toHaveLength(1);
+      expect(statusCard!.content.actions).toEqual(expect.arrayContaining([
+        expect.objectContaining({ label: 'Latest', style: 'primary' }),
+        expect.objectContaining({ label: 'Status' }),
+      ]));
       expect(statusCard!.content.sections[0]).toEqual({ type: 'note', content: 'Starting up' });
     });
 

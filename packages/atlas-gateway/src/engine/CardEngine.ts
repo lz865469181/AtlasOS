@@ -22,6 +22,7 @@ import { PermissionCardBuilderImpl } from './PermissionCard.js';
 import type { PermissionActionPayload } from './PermissionCard.js';
 import { StreamingStateMachineImpl } from './StreamingStateMachine.js';
 import type { StreamingStateMachine } from './StreamingStateMachine.js';
+import { renderActiveCardView } from './CardViewControl.js';
 
 // ── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -188,6 +189,35 @@ export class CardEngineImpl implements CardEngine {
     return this.replyTargets.get(sessionId);
   }
 
+  private syncActiveCard(cardId: string): void {
+    this.cardStore.update(cardId, (state) => {
+      const view = (state.metadata['selectedView'] as 'latest' | 'status' | undefined) ?? 'latest';
+      const rendered = renderActiveCardView(state, view);
+      if (!rendered) {
+        return;
+      }
+      state.content = {
+        ...state.content,
+        sections: rendered.sections,
+        actions: rendered.actions,
+      };
+    });
+  }
+
+  private compactLine(text: string): string {
+    const line = text
+      .split(/\r?\n/)
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .at(-1);
+
+    if (!line) {
+      return '';
+    }
+
+    return line.length > 120 ? `${line.slice(0, 117)}...` : line;
+  }
+
   // ── Private handlers ──────────────────────────────────────────────────
 
   private handleModelOutput(sessionId: string, chatId: string, msg: ModelOutputMessage): void {
@@ -207,19 +237,22 @@ export class CardEngineImpl implements CardEngine {
         },
         sections: [{ type: 'markdown', content: '' }],
       }, this.getReplyTo(sessionId));
+      cardState.metadata['activeCardKind'] = 'streaming';
+      cardState.metadata['streamFullText'] = '';
+      cardState.metadata['streamLastSummary'] = '';
+      cardState.metadata['selectedView'] = 'latest';
       console.log(`[CardEngine] Created streaming card=${cardState.cardId} for chat=${chatId}`);
+      this.syncActiveCard(cardState.cardId);
 
       // Wire up flush handler: update card content
       sm.onFlush(async (content, cardId) => {
         const fullText = sm!.buffer.fullContent;
         console.log(`[CardEngine] onFlush card=${cardId} contentLen=${content.length} fullTextLen=${fullText.length}`);
         this.cardStore.update(cardId, (state) => {
-          // Replace the markdown section with accumulated text
-          state.content = {
-            ...state.content,
-            sections: [{ type: 'markdown', content: fullText }],
-          };
+          state.metadata['streamFullText'] = fullText;
+          state.metadata['streamLastSummary'] = this.compactLine(fullText);
         });
+        this.syncActiveCard(cardId);
         sm!.onSendComplete();
       });
 
@@ -266,6 +299,7 @@ export class CardEngineImpl implements CardEngine {
                   },
                 };
               });
+              this.syncActiveCard(cardId);
             } catch { /* card may already be disposed */ }
           }
         }).catch((e) => console.error(`[CardEngine] sm.finish() error:`, e));
@@ -298,7 +332,11 @@ export class CardEngineImpl implements CardEngine {
           sections: [{ type: 'note' as const, content: msg.detail! }],
         };
         state.metadata['agentStatus'] = msg.status;
+        state.metadata['activeCardKind'] = 'status';
+        state.metadata['statusDetail'] = msg.detail!;
+        state.metadata['selectedView'] = state.metadata['selectedView'] ?? 'latest';
       });
+      this.syncActiveCard(existingCardId);
     } else {
       // Create new status card
       const headerStatus = msg.status === 'running' ? 'running'
@@ -317,7 +355,11 @@ export class CardEngineImpl implements CardEngine {
 
       const cardState = this.cardStore.create(chatId, 'status', content, this.getReplyTo(sessionId));
       cardState.metadata['agentStatus'] = msg.status;
+      cardState.metadata['activeCardKind'] = 'status';
+      cardState.metadata['statusDetail'] = msg.detail!;
+      cardState.metadata['selectedView'] = 'latest';
       this.statusCards.set(sessionId, cardState.cardId);
+      this.syncActiveCard(cardState.cardId);
 
       this.correlationStore.create({
         cardId: cardState.cardId,
@@ -344,13 +386,21 @@ export class CardEngineImpl implements CardEngine {
     });
 
     // Track terminal tools for terminal-output appending
-    const meta = this.toolCardBuilder.has(msg.toolName);
-    if (meta) {
-      // Check if this is a terminal-category tool (Bash, shell, etc.)
-      // We track the most recent tool card per session for terminal-output
-      this.terminalCards.set(sessionId, cardState.cardId);
+      const meta = this.toolCardBuilder.has(msg.toolName);
+      if (meta) {
+        // Check if this is a terminal-category tool (Bash, shell, etc.)
+        // We track the most recent tool card per session for terminal-output
+        this.terminalCards.set(sessionId, cardState.cardId);
+        if (msg.toolName === 'Bash' || msg.toolName === 'CodexBash' || msg.toolName === 'GeminiBash' || msg.toolName === 'shell' || msg.toolName === 'execute') {
+          cardState.metadata['activeCardKind'] = 'terminal';
+          cardState.metadata['terminalCommand'] = String(msg.args.command ?? msg.args.cmd ?? msg.args.script ?? '');
+          cardState.metadata['terminalOutput'] = '';
+          cardState.metadata['terminalLastSummary'] = '';
+          cardState.metadata['selectedView'] = 'latest';
+          this.syncActiveCard(cardState.cardId);
+        }
+      }
     }
-  }
 
   private handleToolResult(sessionId: string, msg: ToolResultMessage): void {
     const entry = this.correlationStore.getByToolCallId(sessionId, msg.callId);
@@ -488,26 +538,14 @@ export class CardEngineImpl implements CardEngine {
       const cardState = this.cardStore.get(terminalCardId);
       if (cardState && cardState.status === 'active') {
         this.cardStore.update(terminalCardId, (state) => {
-          // Find existing output section or append new one
-          const existingSections = [...state.content.sections];
-          const lastSection = existingSections[existingSections.length - 1];
-
-          if (lastSection && lastSection.type === 'markdown' && lastSection.content.startsWith('```\n')) {
-            // Append to existing output code block
-            const existingContent = lastSection.content.slice(4, -4); // Remove ``` markers
-            existingSections[existingSections.length - 1] = {
-              type: 'markdown',
-              content: '```\n' + existingContent + msg.data + '\n```',
-            };
-          } else {
-            existingSections.push({
-              type: 'markdown',
-              content: '```\n' + msg.data + '\n```',
-            });
-          }
-
-          state.content = { ...state.content, sections: existingSections };
+          const previous = String(state.metadata['terminalOutput'] ?? '');
+          const nextOutput = `${previous}${msg.data}`;
+          state.metadata['activeCardKind'] = 'terminal';
+          state.metadata['terminalOutput'] = nextOutput;
+          state.metadata['terminalLastSummary'] = this.compactLine(nextOutput);
+          state.metadata['selectedView'] = state.metadata['selectedView'] ?? 'latest';
         });
+        this.syncActiveCard(terminalCardId);
         return;
       }
     }
@@ -522,7 +560,13 @@ export class CardEngineImpl implements CardEngine {
     };
 
     const cardState = this.cardStore.create(chatId, 'tool', content, this.getReplyTo(sessionId));
+    cardState.metadata['activeCardKind'] = 'terminal';
+    cardState.metadata['terminalCommand'] = '';
+    cardState.metadata['terminalOutput'] = msg.data;
+    cardState.metadata['terminalLastSummary'] = this.compactLine(msg.data);
+    cardState.metadata['selectedView'] = 'latest';
     this.terminalCards.set(sessionId, cardState.cardId);
+    this.syncActiveCard(cardState.cardId);
 
     this.correlationStore.create({
       cardId: cardState.cardId,

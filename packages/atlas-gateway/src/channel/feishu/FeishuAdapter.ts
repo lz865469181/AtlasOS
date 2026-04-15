@@ -46,6 +46,17 @@ export interface LarkImReaction {
   }): Promise<unknown>;
 }
 
+export interface LarkImMessageResource {
+  get(params: {
+    params: { type: string };
+    path: { message_id: string; file_key: string };
+  }): Promise<{
+    writeFile: (filePath: string) => Promise<unknown>;
+    getReadableStream: () => unknown;
+    headers: Record<string, unknown>;
+  }>;
+}
+
 /**
  * Minimal interface over the parts of `@larksuiteoapi/node-sdk` we consume.
  * In production, provide the real `lark.Client`; in tests, provide a mock.
@@ -54,6 +65,7 @@ export interface LarkClient {
   im: {
     message: LarkImMessage;
     messageReaction?: LarkImReaction;
+    messageResource?: LarkImMessageResource;
   };
 }
 

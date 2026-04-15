@@ -1,8 +1,15 @@
 import * as z from 'zod';
 import type { CardModel } from '../cards/CardModel.js';
 import type { RuntimeSession, WatchRuntimeState } from '../runtime/RuntimeModels.js';
+import type { CardViewMode } from './CardViewControl.js';
 
-export const WatchControlActionSchema = z.enum(['focus', 'show-latest-output', 'unwatch']);
+export const WatchControlActionSchema = z.enum([
+  'focus',
+  'show-latest-output',
+  'view-latest',
+  'view-status',
+  'unwatch',
+]);
 
 export const WatchControlPayloadSchema = z.object({
   v: z.literal(1),
@@ -42,29 +49,39 @@ export interface WatchNotificationCardParams {
   message: string;
   watchState: WatchRuntimeState;
   runtimeStatus?: RuntimeSession['status'];
+  view?: CardViewMode;
 }
 
 export function buildWatchNotificationCard(params: WatchNotificationCardParams): CardModel {
-  const sections: CardModel['sections'] = [
-    { type: 'markdown', content: params.message },
-    {
+  const view = params.view ?? 'latest';
+  const sections: CardModel['sections'] = [{ type: 'markdown', content: params.message }];
+
+  if (view === 'latest') {
+    const latestOutput = params.watchState.lastOutputPreview?.trim();
+    const latestContent = latestOutput || params.watchState.lastSummary || 'No captured output yet.';
+    sections.push({
       type: 'fields',
       fields: [
         { label: 'Runtime', value: params.runtimeLabel, short: true },
         { label: 'Unread', value: String(params.watchState.unreadCount), short: true },
       ],
-    },
-  ];
-
-  if (params.runtimeStatus) {
+    });
+    sections.push({ type: 'markdown', content: `\`\`\`text\n${latestContent.replace(/```/g, "'''")}\n\`\`\`` });
+  } else {
     sections.push({
       type: 'fields',
-      fields: [{ label: 'Status', value: params.runtimeStatus, short: true }],
+      fields: [
+        { label: 'Runtime', value: params.runtimeLabel, short: true },
+        { label: 'Unread', value: String(params.watchState.unreadCount), short: true },
+        { label: 'Status', value: params.runtimeStatus ?? 'unknown', short: true },
+      ],
     });
-  }
-
-  if (params.watchState.lastSummary) {
-    sections.push({ type: 'note', content: `Latest: ${params.watchState.lastSummary}` });
+    sections.push({
+      type: 'note',
+      content: params.watchState.lastSummary
+        ? `Latest: ${params.watchState.lastSummary}`
+        : 'No summary yet.',
+    });
   }
 
   return {
@@ -76,14 +93,20 @@ export function buildWatchNotificationCard(params: WatchNotificationCardParams):
     actions: [
       {
         type: 'button',
-        label: 'Show Latest Output',
-        style: 'default',
-        value: createWatchControlPayload('show-latest-output', params.bindingId, params.runtimeId),
+        label: 'Latest',
+        style: view === 'latest' ? 'primary' : 'default',
+        value: createWatchControlPayload('view-latest', params.bindingId, params.runtimeId),
+      },
+      {
+        type: 'button',
+        label: 'Status',
+        style: view === 'status' ? 'primary' : 'default',
+        value: createWatchControlPayload('view-status', params.bindingId, params.runtimeId),
       },
       {
         type: 'button',
         label: 'Focus Runtime',
-        style: 'primary',
+        style: 'default',
         value: createWatchControlPayload('focus', params.bindingId, params.runtimeId),
       },
       {

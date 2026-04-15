@@ -46,3 +46,35 @@ export function resolveAttachedRuntime(prefix: string, context: CommandContext):
 
   return { target: matched[0] };
 }
+
+/**
+ * Resolve a runtime by name/ID across all known runtimes (not just attached),
+ * preferring attached ones, then falling back to the registry list.
+ */
+export function resolveRuntimeAny(prefix: string, context: CommandContext): {
+  target?: RuntimeSession;
+  error?: string;
+} {
+  const query = prefix.trim();
+  if (!query) return { error: 'missing target' };
+
+  const allRuntimes = context.runtimeRegistry.list();
+  if (allRuntimes.length === 0) return { error: 'No runtimes registered.' };
+
+  const lower = query.toLowerCase();
+
+  const byDisplay = allRuntimes.filter((r) => r.displayName?.toLowerCase() === lower);
+  if (byDisplay.length === 1) return { target: byDisplay[0] };
+
+  const byDisplayPrefix = allRuntimes.filter((r) => r.displayName?.toLowerCase().startsWith(lower));
+  if (byDisplayPrefix.length === 1) return { target: byDisplayPrefix[0] };
+
+  const byIdPrefix = allRuntimes.filter((r) => r.id.toLowerCase().startsWith(lower));
+  if (byIdPrefix.length === 1) return { target: byIdPrefix[0] };
+
+  if (byDisplay.length + byDisplayPrefix.length + byIdPrefix.length === 0) {
+    return { error: `No runtime matches: ${query}. Use /sessions to see runtimes.` };
+  }
+
+  return { error: `Ambiguous: ${query} matches multiple runtimes. Be more specific.` };
+}

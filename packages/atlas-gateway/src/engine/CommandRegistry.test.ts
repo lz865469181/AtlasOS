@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CommandRegistryImpl, type Command, type CommandContext } from './CommandRegistry.js';
+import { PairCommand } from './commands/PairCommand.js';
 import type { ChannelSender } from '../channel/ChannelSender.js';
 import { BindingStoreImpl } from '../runtime/BindingStore.js';
 import { RuntimeRegistryImpl } from '../runtime/RuntimeRegistry.js';
@@ -193,7 +194,10 @@ describe('CommandRegistry', () => {
       expect(names).toContain('sessions');
       expect(names).toContain('destroy');
       expect(names).toContain('tmux');
-      expect(commands).toHaveLength(16);
+      expect(names).toContain('discover');
+      expect(names).toContain('adopt');
+      expect(names).toContain('pair');
+      expect(commands).toHaveLength(19);
     });
 
     it('should include custom commands after registration', () => {
@@ -204,7 +208,7 @@ describe('CommandRegistry', () => {
       });
       const names = registry.listCommands().map((c) => c.name);
       expect(names).toContain('deploy');
-      expect(names).toHaveLength(17);
+      expect(names).toHaveLength(20);
     });
   });
 
@@ -278,10 +282,16 @@ describe('CommandRegistry', () => {
       defaultPermissionMode?: string;
       localRuntimeManager?: {
         startTmuxRuntime: ReturnType<typeof vi.fn>;
+        discoverTmuxSessions: ReturnType<typeof vi.fn>;
+        adoptTmuxRuntime: ReturnType<typeof vi.fn>;
       };
     }): Promise<CommandContext & {
       runtimeBridge: { cancel: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn> };
-      localRuntimeManager: { startTmuxRuntime: ReturnType<typeof vi.fn> };
+      localRuntimeManager: {
+        startTmuxRuntime: ReturnType<typeof vi.fn>;
+        discoverTmuxSessions: ReturnType<typeof vi.fn>;
+        adoptTmuxRuntime: ReturnType<typeof vi.fn>;
+      };
     }> {
       const runtimeRegistry = new RuntimeRegistryImpl();
       const bindingStore = new BindingStoreImpl();
@@ -353,6 +363,58 @@ describe('CommandRegistry', () => {
             tmuxTarget: `${sessionName}:0.0`,
           };
         }),
+        discoverTmuxSessions: vi.fn().mockResolvedValue([
+          { sessionName: 'claude-main', registeredRuntime: null },
+          {
+            sessionName: 'codex-lab',
+            registeredRuntime: {
+              id: 'runtime-tmux-codex-existing',
+              displayName: 'codex-live',
+              provider: 'codex',
+              transport: 'tmux',
+            },
+          },
+        ]),
+        adoptTmuxRuntime: vi.fn().mockImplementation(async ({
+          provider,
+          sessionName,
+          displayName,
+        }: {
+          provider: 'claude' | 'codex';
+          sessionName: string;
+          displayName?: string;
+        }) => {
+          const runtime: RuntimeSession = makeRuntime({
+            id: `runtime-adopt-${provider}-1`,
+            displayName: displayName || sessionName,
+            provider,
+            source: 'external',
+            transport: 'tmux',
+            capabilities: {
+              streaming: true,
+              permissionCards: false,
+              fileAccess: true,
+              imageInput: false,
+              terminalOutput: true,
+              patchEvents: false,
+            },
+            resumeHandle: { kind: 'tmux-session', value: sessionName },
+            metadata: {
+              agentId: provider,
+              permissionMode: 'auto',
+              tmuxSessionName: sessionName,
+              tmuxTarget: `${sessionName}:0.0`,
+              tmuxAdopted: 'true',
+            },
+          });
+          await runtimeRegistry.registerExternal(runtime);
+          return {
+            runtime,
+            sessionName,
+            tmuxTarget: `${sessionName}:0.0`,
+            reused: false,
+          };
+        }),
       };
 
       return {
@@ -370,7 +432,11 @@ describe('CommandRegistry', () => {
         } as unknown as ChannelSender,
       } as CommandContext & {
         runtimeBridge: { cancel: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn> };
-        localRuntimeManager: { startTmuxRuntime: ReturnType<typeof vi.fn> };
+        localRuntimeManager: {
+          startTmuxRuntime: ReturnType<typeof vi.fn>;
+          discoverTmuxSessions: ReturnType<typeof vi.fn>;
+          adoptTmuxRuntime: ReturnType<typeof vi.fn>;
+        };
       };
     }
 
@@ -579,16 +645,28 @@ describe('CommandRegistry', () => {
       expect(output).toContain('Invalid mode');
     });
 
-    it('/new creates and switches to a fresh runtime', async () => {
+    it('/new creates and switches to a fresh tmux runtime when local tmux management is available', async () => {
       const ctx = await makeContext();
       const result = registry.resolve('/new');
       const output = await result!.command.execute('', ctx);
+      expect(ctx.localRuntimeManager.startTmuxRuntime).toHaveBeenCalledWith({
+        provider: 'claude',
+        name: 'main',
+        binding: expect.objectContaining({ bindingId: ctx.binding.bindingId }),
+        displayName: 'main',
+        sessionName: expect.any(String),
+      });
       expect(ctx.binding.activeRuntimeId).toBeTruthy();
       expect(ctx.binding.activeRuntimeId).not.toBe('runtime-1');
-      expect(output).toContain('Started new runtime: main');
+      expect(ctx.runtimeRegistry.get(ctx.binding.activeRuntimeId!)).toMatchObject({
+        displayName: 'main',
+        provider: 'claude',
+        transport: 'tmux',
+      });
+      expect(output).toContain('Started new runtime: main [claude/tmux]');
     });
 
-    it('/new honors the configured default agent when provided', async () => {
+    it('/new honors the configured default agent when provided and uses tmux for codex', async () => {
       const ctx = await makeContext({
         defaultAgentId: 'codex',
         defaultPermissionMode: 'deny',
@@ -600,9 +678,30 @@ describe('CommandRegistry', () => {
       expect(runtime).toMatchObject({
         displayName: 'main',
         provider: 'codex',
-        transport: 'sdk',
+        transport: 'tmux',
         metadata: expect.objectContaining({
           agentId: 'codex',
+        }),
+      });
+      expect(output).toContain('Started new runtime: main [codex/tmux]');
+    });
+
+    it('/new falls back to a managed runtime when the default agent has no tmux transport', async () => {
+      const ctx = await makeContext({
+        defaultAgentId: 'gemini',
+        defaultPermissionMode: 'deny',
+      });
+      const result = registry.resolve('/new');
+      const output = await result!.command.execute('', ctx);
+      const runtime = ctx.runtimeRegistry.get(ctx.binding.activeRuntimeId!);
+
+      expect(ctx.localRuntimeManager.startTmuxRuntime).not.toHaveBeenCalled();
+      expect(runtime).toMatchObject({
+        displayName: 'main',
+        provider: 'gemini',
+        transport: 'sdk',
+        metadata: expect.objectContaining({
+          agentId: 'gemini',
           permissionMode: 'deny',
         }),
       });
@@ -664,6 +763,29 @@ describe('CommandRegistry', () => {
       expect(ctx.binding.activeRuntimeId).toBe('runtime-codex-1');
       expect(output).toContain('Attached to **codex-local** [codex/tmux]');
       expect(output).toContain('tmux-backed runtime');
+    });
+
+    it('/pair attaches two runtimes, focuses the first, watches the second', async () => {
+      const ctx = await makeContext({
+        runtimes: [
+          makeRuntime({ id: 'runtime-a', displayName: 'main' }),
+          makeRuntime({ id: 'runtime-b', displayName: 'ops', transport: 'tmux', source: 'external' }),
+        ],
+      });
+
+      ctx.runtimeRegistry.registerExternal = vi.fn();
+      ctx.bindingStore.attach = vi.fn(ctx.bindingStore.attach.bind(ctx.bindingStore));
+      ctx.bindingStore.setActive = vi.fn(ctx.bindingStore.setActive.bind(ctx.bindingStore));
+      ctx.bindingStore.addWatching = vi.fn(ctx.bindingStore.addWatching.bind(ctx.bindingStore));
+
+      registry.register(PairCommand);
+      const result = registry.resolve('/pair main ops');
+      const output = await result!.command.execute(result!.args, ctx);
+
+      expect(output).toContain('Active: **main**');
+      expect(output).toContain('Watching: **ops**');
+      expect(ctx.bindingStore.setActive).toHaveBeenCalledWith(ctx.binding.bindingId, 'runtime-a');
+      expect(ctx.bindingStore.addWatching).toHaveBeenCalledWith(ctx.binding.bindingId, 'runtime-b');
     });
 
     it('/sessions shows provider and transport for attached tmux runtimes', async () => {
@@ -1069,6 +1191,8 @@ describe('CommandRegistry', () => {
             new Error('spawn tmux ENOENT'),
             { code: 'ENOENT' },
           )),
+          discoverTmuxSessions: vi.fn(),
+          adoptTmuxRuntime: vi.fn(),
         },
       });
       const result = registry.resolve('/tmux');
@@ -1078,6 +1202,35 @@ describe('CommandRegistry', () => {
       expect(output).toContain('brew install tmux');
       expect(output).toContain('apt-get install tmux');
       expect(output).toContain('CODELINK_TMUX_BIN');
+    });
+
+    it('/discover lists local tmux sessions and flags registered ones', async () => {
+      const ctx = await makeContext();
+      const result = registry.resolve('/discover');
+      const output = await result!.command.execute('', ctx);
+
+      expect(ctx.localRuntimeManager.discoverTmuxSessions).toHaveBeenCalled();
+      expect(output).toContain('Local tmux sessions');
+      expect(output).toContain('1. claude-main');
+      expect(output).toContain('/adopt claude-main');
+      expect(output).toContain('2. codex-lab');
+      expect(output).toContain('already registered as **codex-live**');
+    });
+
+    it('/adopt registers a local tmux session and attaches this thread to it', async () => {
+      const ctx = await makeContext();
+      const result = registry.resolve('/adopt');
+      const output = await result!.command.execute('--provider codex codex-lab spec-review', ctx);
+
+      expect(ctx.localRuntimeManager.adoptTmuxRuntime).toHaveBeenCalledWith({
+        provider: 'codex',
+        sessionName: 'codex-lab',
+        displayName: 'spec-review',
+        binding: expect.objectContaining({ bindingId: ctx.binding.bindingId }),
+      });
+      expect(ctx.binding.activeRuntimeId).toBe('runtime-adopt-codex-1');
+      expect(output).toContain('Adopted tmux runtime: spec-review [codex/tmux]');
+      expect(output).toContain('This thread is now attached to the adopted tmux runtime.');
     });
   });
 

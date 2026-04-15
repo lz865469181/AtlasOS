@@ -12,7 +12,9 @@ CodeLink uses a dual-layer model:
 That split lets `/new`, `/attach`, `/switch`, `/detach`, and `/sessions` behave cleanly without mixing transport state and chat state.
 
 Each thread now supports one primary interactive runtime plus multiple secondary watching runtimes. The active runtime receives normal prompts and detailed output; watching runtimes are meant for status checks, completion awareness, and on-demand promotion back to active.
-Watching runtimes accumulate unread summaries and emit lightweight reminders for completion, error, and approval-needed events instead of streaming full output into the thread. Watch cards include `Show Latest Output`, `Focus Runtime`, and `Stop Watching` so the thread can stay lightweight until you explicitly expand the latest captured output.
+Watching runtimes accumulate unread summaries and emit lightweight reminders for completion, error, and approval-needed events instead of streaming full output into the thread. Active and watch cards both expose lightweight `Latest / Status` view toggles, and watch cards keep `Focus Runtime` plus `Stop Watching` so the thread stays compact until you expand the view you need.
+
+For tmux-backed Feishu runtimes, `file` and `image` attachments can now be materialized into local files before prompt injection. CodeLink saves them under `.codelink/uploads/<runtime-id>/...` beneath the runtime working directory and forwards a textual prompt containing the saved path into the tmux session. `audio` attachments are still ignored for runtime bridging.
 
 ## Monorepo Layout
 
@@ -87,6 +89,9 @@ codelink.config.json -> atlas.config.json -> .env -> runtime overrides
 | `/status` | Show runtime provider, transport, model, mode, uptime, and runtime ID |
 | `/list` | List thread bindings and known runtimes in the current chat |
 | `/attach <name|id>` | Attach an existing runtime to this thread |
+| `/discover` | List local tmux sessions that can be adopted from chat |
+| `/adopt [--provider claude|codex] <tmux-session> [name]` | Register an existing local tmux session and attach this thread to it |
+| `/pair <active-name|id> <watch-name|id>` | Attach two runtimes, set the first active, and set the second watching |
 | `/tmux [--provider claude|codex] [name]` | Start a local tmux-backed runtime from chat and attach this thread to it |
 | `/focus <number|name|id>` | Promote another attached runtime to active |
 | `/switch <number|name|id>` | Alias for `/focus` |
@@ -106,9 +111,11 @@ Managed runtimes still exist as a supplement:
 
 - use tmux-backed runtimes when you want chat to control an already-running local coding session
 - use managed runtimes when you want CodeLink to create an SDK-driven runtime directly
+- `/new` now prefers tmux-backed runtimes for local `claude` and `codex` defaults when local tmux management is available; non-tmux agents such as `gemini` still fall back to managed SDK runtimes
 
 tmux is still optional for the base service. Install it when you want to bridge an already-running local Claude Code or Codex session into Feishu/DingTalk.
 If `tmux` is missing locally, `/tmux` and `codelink-runtime start|discover|adopt` now return explicit install guidance instead of only exposing the raw spawn error.
+On Windows, `psmux` is a workable native substitute for this project because it exposes the tmux-compatible commands CodeLink uses. Install it with `winget install -e --id marlocarlo.psmux`, then restart the shell or point `CODELINK_TMUX_BIN` at the installed `psmux.exe`.
 
 Examples:
 
@@ -128,6 +135,7 @@ Behavior:
 - `discover` lists local tmux sessions that can be adopted.
 - `adopt` registers an existing tmux session without creating or killing it.
 - Feishu can also create tmux-backed local runtimes directly from chat with `/tmux [--provider claude|codex] [name]`.
+- Feishu can discover and adopt local tmux sessions directly from chat with `/discover` and `/adopt [--provider claude|codex] <tmux-session> [name]`.
 - Feishu `/attach` and DingTalk `/attach` bind to that same tmux-backed runtime instead of shelling into `tmux attach`.
 - Re-adopting the same `provider + tmux session` reuses the existing runtime registration.
 
@@ -135,11 +143,14 @@ Examples from chat:
 
 - `/tmux feature-lab` starts a local Claude Code tmux session and attaches the current thread to it.
 - `/tmux --provider codex spec-review` starts a local Codex tmux session and attaches the current thread to it.
-- Watch notification cards expose `Show Latest Output` when you want the most recent captured output without fully focusing that runtime.
+- `/discover` lists local tmux sessions and tells you which ones are already registered.
+- `/adopt --provider codex codex-lab spec-review` registers an existing local tmux session and binds the current thread to it.
+- `/pair dev-shell ops-shell` attaches both runtimes, keeps `dev-shell` active, and marks `ops-shell` as watching in one step.
+- Active and watch cards expose `Latest / Status` buttons so you can switch views without generating extra reply messages.
 
 Current recommendation:
 
-- for local Claude Code / Codex workflows, prefer `codelink-runtime start|adopt` + chat `/attach`, or start directly from Feishu with `/tmux`
+- for local Claude Code / Codex workflows, use `/new`, `/tmux`, `/discover`, and `/adopt` directly from Feishu when possible; `codelink-runtime start|adopt` remains useful for local shell-driven setup
 - treat managed Codex/Claude runtimes as a fallback or lightweight direct-start option
 
 The standalone helper binary is `codelink-runtime`. `atlas-runtime` remains available as a compatibility alias.

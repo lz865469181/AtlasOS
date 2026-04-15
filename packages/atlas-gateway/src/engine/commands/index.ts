@@ -12,3 +12,6 @@ export { SwitchCommand } from './SwitchCommand.js';
 export { DetachCommand } from './DetachCommand.js';
 export { SessionsCommand } from './SessionsCommand.js';
 export { TmuxCommand } from './TmuxCommand.js';
+export { DiscoverCommand } from './DiscoverCommand.js';
+export { AdoptCommand } from './AdoptCommand.js';
+export { PairCommand } from './PairCommand.js';

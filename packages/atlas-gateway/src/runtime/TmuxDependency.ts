@@ -28,6 +28,8 @@ export function buildTmuxInstallHint(tmuxBin = 'tmux'): string {
   return [
     `tmux is not installed or not reachable as \`${tmuxBin}\`.`,
     'Install tmux, or point `CODELINK_TMUX_BIN` / `ATLAS_TMUX_BIN` / `TMUX_BIN` to the tmux binary path.',
+    'Windows (PowerShell): `winget install -e --id marlocarlo.psmux`',
+    'Windows note: restart the shell so the `tmux` alias is available, or set `CODELINK_TMUX_BIN` to the installed `psmux.exe` path directly.',
     'macOS: `brew install tmux`',
     'Ubuntu/Debian: `sudo apt-get install tmux`',
     'Fedora/RHEL: `sudo dnf install tmux`',

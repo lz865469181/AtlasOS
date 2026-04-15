@@ -15,6 +15,7 @@ import type { CommandContext, CommandRegistryImpl, LocalRuntimeManager } from '.
 import type { PermissionService } from './PermissionService.js';
 import type { IdleWatcher } from './IdleWatcher.js';
 import { buildWatchNotificationCard, parseWatchControlPayload } from './WatchControl.js';
+import { parseCardViewPayload, renderActiveCardView } from './CardViewControl.js';
 
 const WATCH_OUTPUT_PREVIEW_LIMIT = 4000;
 
@@ -52,6 +53,7 @@ export interface Engine {
 }
 
 export class EngineImpl implements Engine {
+  private readonly cardStore: CardStateStoreImpl;
   private readonly pipeline: CardRenderPipeline;
   private readonly cardEngine: CardEngineImpl;
   private readonly runtimeRegistry: RuntimeRegistryImpl;
@@ -67,6 +69,7 @@ export class EngineImpl implements Engine {
   private readonly idleWatcher?: IdleWatcher;
 
   constructor(deps: EngineDeps) {
+    this.cardStore = deps.cardStore;
     this.pipeline = deps.pipeline;
     this.cardEngine = deps.cardEngine;
     this.runtimeRegistry = deps.runtimeRegistry;
@@ -172,6 +175,12 @@ export class EngineImpl implements Engine {
       return;
     }
 
+    const cardView = parseCardViewPayload(event.value);
+    if (cardView) {
+      this.handleActiveCardViewAction(event.messageId, cardView.view);
+      return;
+    }
+
     await this.permissionService.handleAction(event);
   }
 
@@ -216,7 +225,7 @@ export class EngineImpl implements Engine {
   }
 
   private handleWatchControlAction(payload: {
-    action: 'focus' | 'show-latest-output' | 'unwatch';
+    action: 'focus' | 'show-latest-output' | 'view-latest' | 'view-status' | 'unwatch';
     bindingId: string;
     runtimeId: string;
   }, event: CardActionEvent): Promise<void> | void {
@@ -234,22 +243,51 @@ export class EngineImpl implements Engine {
       return;
     }
 
-    if (payload.action === 'show-latest-output') {
+    if (
+      payload.action === 'show-latest-output'
+      || payload.action === 'view-latest'
+      || payload.action === 'view-status'
+    ) {
       const sender = this.senderFactory(event.chatId, binding.channelId);
       const runtime = this.runtimeRegistry.get(payload.runtimeId);
       const runtimeLabel = runtime?.displayName ?? payload.runtimeId.slice(0, 8);
       const watchState = binding.watchState[payload.runtimeId];
-      const output = watchState?.lastOutputPreview?.trim() || watchState?.lastSummary || 'No captured output yet.';
-      const sanitized = output.replace(/```/g, "'''");
-      return sender.sendMarkdown(
-        `### Latest Output: ${runtimeLabel}\n\`\`\`text\n${sanitized}\n\`\`\``,
-        undefined,
-      ).then(() => undefined);
+      const view = payload.action === 'view-status' ? 'status' : 'latest';
+      return sender.updateCard(event.messageId, buildWatchNotificationCard({
+        bindingId: binding.bindingId,
+        runtimeId: payload.runtimeId,
+        runtimeLabel,
+        status: runtime?.status === 'error' ? 'error' : runtime?.status === 'idle' ? 'done' : 'waiting',
+        message: `The watching runtime **${runtimeLabel}** needs attention.`,
+        watchState: watchState ?? { unreadCount: 0 },
+        runtimeStatus: runtime?.status,
+        view,
+      })).then(() => undefined);
     }
 
     if (binding.watchRuntimeIds.includes(payload.runtimeId)) {
       this.bindingStore.removeWatching(binding.bindingId, payload.runtimeId);
     }
+  }
+
+  private handleActiveCardViewAction(messageId: string, view: 'latest' | 'status'): void {
+    const card = this.cardStore.getByMessageId(messageId);
+    if (!card) {
+      return;
+    }
+
+    this.cardStore.update(card.cardId, (state) => {
+      state.metadata['selectedView'] = view;
+      const rendered = renderActiveCardView(state, view);
+      if (!rendered) {
+        return;
+      }
+      state.content = {
+        ...state.content,
+        sections: rendered.sections,
+        actions: rendered.actions,
+      };
+    });
   }
 
   private touchBinding(bindingId: string): void {

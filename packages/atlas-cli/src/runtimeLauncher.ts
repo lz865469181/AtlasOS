@@ -19,6 +19,8 @@ export interface RuntimeRegistrationPayload {
 export interface LaunchTmuxRuntimeOptions {
   provider: 'claude' | 'codex';
   name: string;
+  displayName?: string;
+  sessionName?: string;
   cwd: string;
   cliPath: string;
   serverUrl: string;
@@ -58,6 +60,15 @@ function sanitizeSessionName(name: string): string {
 
 function defaultDisplayName(name: string): string {
   return name.trim() || 'codelink-runtime';
+}
+
+function normalizeDiscoveredSessionName(line: string): string {
+  const trimmed = line.trim();
+  const fallbackMatch = /^([^:]+):\s+\d+\s+windows?\b/i.exec(trimmed);
+  if (fallbackMatch) {
+    return fallbackMatch[1].trim();
+  }
+  return trimmed;
 }
 
 function buildRuntimeCommand(provider: 'claude' | 'codex', cliPath: string, runtimeId: string): string {
@@ -109,7 +120,7 @@ export async function discoverTmuxSessions(
   const stdout = await deps.runCommand(['list-sessions', '-F', '#{session_name}']);
   return stdout
     .split(/\r?\n/)
-    .map((line) => line.trim())
+    .map(normalizeDiscoveredSessionName)
     .filter(Boolean)
     .map((sessionName) => ({ sessionName }));
 }
@@ -130,8 +141,9 @@ export async function launchTmuxRuntime(
   deps: LaunchTmuxRuntimeDeps,
 ): Promise<{ runtimeId: string; displayName: string; sessionName: string; tmuxTarget: string }> {
   const runtimeId = deps.createRuntimeId?.() ?? crypto.randomUUID();
-  const displayName = defaultDisplayName(opts.name || runtimeId.slice(0, 8));
-  const sessionName = `codelink-${sanitizeSessionName(displayName)}`;
+  const displayName = defaultDisplayName((opts.displayName ?? opts.name) || runtimeId.slice(0, 8));
+  const sessionBaseName = sanitizeSessionName(opts.sessionName ?? displayName);
+  const sessionName = `codelink-${sessionBaseName}`;
   const tmuxTarget = `${sessionName}:0.0`;
 
   await deps.runCommand([

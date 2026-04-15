@@ -9,11 +9,30 @@ export interface LocalRuntimeManager {
   startTmuxRuntime(opts: {
     provider: 'claude' | 'codex';
     name: string;
+    displayName?: string;
+    sessionName?: string;
     binding: ConversationBinding;
   }): Promise<{
     runtime: RuntimeSession;
     sessionName: string;
     tmuxTarget: string;
+  }>;
+  discoverTmuxSessions(opts: {
+    binding: ConversationBinding;
+  }): Promise<Array<{
+    sessionName: string;
+    registeredRuntime: Pick<RuntimeSession, 'id' | 'displayName' | 'provider' | 'transport'> | null;
+  }>>;
+  adoptTmuxRuntime(opts: {
+    provider: 'claude' | 'codex';
+    sessionName: string;
+    displayName?: string;
+    binding: ConversationBinding;
+  }): Promise<{
+    runtime: RuntimeSession;
+    sessionName: string;
+    tmuxTarget: string;
+    reused: boolean;
   }>;
 }
 
@@ -56,13 +75,16 @@ import { DetachCommand } from './commands/DetachCommand.js';
 import { SessionsCommand } from './commands/SessionsCommand.js';
 import { DestroyCommand } from './commands/DestroyCommand.js';
 import { TmuxCommand } from './commands/TmuxCommand.js';
+import { DiscoverCommand } from './commands/DiscoverCommand.js';
+import { AdoptCommand } from './commands/AdoptCommand.js';
+import { PairCommand } from './commands/PairCommand.js';
 
 const helpCommand: Command = {
   name: 'help',
   aliases: ['h', '?'],
   description: 'Show available commands.',
   execute: async () =>
-    'Available commands: /agent, /model, /mode, /cancel, /status, /new, /tmux, /destroy, /list, /attach, /focus, /watch, /unwatch, /detach, /sessions, /help',
+    'Available commands: /agent, /model, /mode, /cancel, /status, /new, /tmux, /discover, /adopt, /pair, /destroy, /list, /attach, /focus, /watch, /unwatch, /detach, /sessions, /help',
 };
 
 const builtinCommands: Command[] = [
@@ -73,6 +95,9 @@ const builtinCommands: Command[] = [
   StatusCommand,
   NewCommand,
   TmuxCommand,
+  DiscoverCommand,
+  AdoptCommand,
+  PairCommand,
   ListCommand,
   AttachCommand,
   FocusCommand,
