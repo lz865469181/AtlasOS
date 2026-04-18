@@ -26,6 +26,28 @@ describe('AgentMessage type guards', () => {
     const msg: AgentMessage = { type: 'permission-request', id: 'p1', reason: 'test', payload: {} };
     expect(isPermissionRequestMessage(msg)).toBe(true);
   });
+
+  it('accepts command lifecycle messages in the shared union', () => {
+    const started: AgentMessage = {
+      type: 'command-start',
+      commandId: 'cmd-1',
+      command: 'npm test',
+      cwd: '/repo',
+    };
+    const exited: AgentMessage = {
+      type: 'command-exit',
+      commandId: 'cmd-1',
+      exitCode: 0,
+    };
+    const cwdChanged: AgentMessage = {
+      type: 'cwd-change',
+      cwd: '/repo/packages/gateway',
+    };
+
+    expect(started.type).toBe('command-start');
+    expect(exited.type).toBe('command-exit');
+    expect(cwdChanged.type).toBe('cwd-change');
+  });
 });
 
 describe('getMessageText', () => {

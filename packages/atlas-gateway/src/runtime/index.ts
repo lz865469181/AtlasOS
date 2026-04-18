@@ -8,4 +8,5 @@ export * from './RuntimeSpecs.js';
 export * from './TmuxDependency.js';
 export * from './adapters/AtlasClaudeRuntimeAdapter.js';
 export * from './adapters/ExternalRuntimeAdapter.js';
+export * from './adapters/PtyRuntimeAdapter.js';
 export * from './adapters/TmuxRuntimeAdapter.js';

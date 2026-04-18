@@ -10,7 +10,7 @@ export const NewCommand: Command = {
     const spec = defaultRuntimeSpecForAgent(agentId);
 
     if (context.localRuntimeManager && (spec.provider === 'claude' || spec.provider === 'codex')) {
-      const started = await context.localRuntimeManager.startTmuxRuntime({
+      const started = await context.localRuntimeManager.startLocalRuntime({
         provider: spec.provider,
         name: 'main',
         displayName: 'main',

@@ -13,6 +13,9 @@ import type {
   ExecApprovalRequestMessage,
   PatchApplyBeginMessage,
   PatchApplyEndMessage,
+  CommandStartMessage,
+  CommandExitMessage,
+  CwdChangeMessage,
 } from 'codelink-agent';
 import type { CardModel } from '../cards/CardModel.js';
 import { CardStateStoreImpl } from './CardStateStore.js';
@@ -107,6 +110,15 @@ export class CardEngineImpl implements CardEngine {
         break;
       case 'terminal-output':
         this.handleTerminalOutput(sessionId, chatId, msg);
+        break;
+      case 'command-start':
+        this.handleCommandStart(sessionId, chatId, msg);
+        break;
+      case 'command-exit':
+        this.handleCommandExit(sessionId, chatId, msg);
+        break;
+      case 'cwd-change':
+        this.handleCwdChange(sessionId, chatId, msg);
         break;
       case 'event':
         this.handleEvent(sessionId, chatId, msg);
@@ -531,7 +543,7 @@ export class CardEngineImpl implements CardEngine {
   }
 
   private handleTerminalOutput(sessionId: string, chatId: string, msg: TerminalOutputMessage): void {
-    const terminalCardId = this.terminalCards.get(sessionId);
+    const terminalCardId = this.ensureTerminalCard(sessionId, chatId);
 
     if (terminalCardId) {
       // Append to existing terminal card
@@ -574,6 +586,70 @@ export class CardEngineImpl implements CardEngine {
       chatId,
       sessionId,
     });
+  }
+
+  private handleCommandStart(sessionId: string, chatId: string, msg: CommandStartMessage): void {
+    const terminalCardId = this.ensureTerminalCard(sessionId, chatId, `Command: ${msg.command}`, 'running');
+    if (!terminalCardId) {
+      return;
+    }
+
+    this.cardStore.update(terminalCardId, (state) => {
+      state.content = {
+        ...state.content,
+        header: {
+          title: `Command: ${msg.command}`,
+          icon: '\u{1F4BB}',
+          status: 'running',
+        },
+      };
+      state.metadata['activeCardKind'] = 'terminal';
+      state.metadata['terminalCommand'] = msg.command;
+      state.metadata['terminalCurrentCommandId'] = msg.commandId;
+      state.metadata['terminalExitCode'] = '';
+      if (msg.cwd) {
+        state.metadata['terminalCwd'] = msg.cwd;
+      }
+      state.metadata['selectedView'] = state.metadata['selectedView'] ?? 'latest';
+    });
+    this.syncActiveCard(terminalCardId);
+  }
+
+  private handleCommandExit(sessionId: string, chatId: string, msg: CommandExitMessage): void {
+    const terminalCardId = this.ensureTerminalCard(sessionId, chatId);
+    if (!terminalCardId) {
+      return;
+    }
+
+    this.cardStore.update(terminalCardId, (state) => {
+      const command = String(state.metadata['terminalCommand'] ?? '');
+      state.content = {
+        ...state.content,
+        header: {
+          title: command ? `Command: ${command}` : 'Terminal Output',
+          icon: '\u{1F4BB}',
+          status: msg.exitCode === 0 ? 'done' : 'error',
+        },
+      };
+      state.metadata['terminalCurrentCommandId'] = msg.commandId;
+      state.metadata['terminalExitCode'] = msg.exitCode;
+      state.metadata['selectedView'] = state.metadata['selectedView'] ?? 'latest';
+    });
+    this.syncActiveCard(terminalCardId);
+  }
+
+  private handleCwdChange(sessionId: string, chatId: string, msg: CwdChangeMessage): void {
+    const terminalCardId = this.ensureTerminalCard(sessionId, chatId);
+    if (!terminalCardId) {
+      return;
+    }
+
+    this.cardStore.update(terminalCardId, (state) => {
+      state.metadata['activeCardKind'] = 'terminal';
+      state.metadata['terminalCwd'] = msg.cwd;
+      state.metadata['selectedView'] = state.metadata['selectedView'] ?? 'latest';
+    });
+    this.syncActiveCard(terminalCardId);
   }
 
   private handleEvent(sessionId: string, chatId: string, msg: EventMessage): void {
@@ -624,6 +700,11 @@ export class CardEngineImpl implements CardEngine {
     chatId: string,
     msg: ExecApprovalRequestMessage,
   ): void {
+    const sm = this.streamingSMs.get(sessionId);
+    if (sm && sm.state !== 'paused' && sm.state !== 'completed' && sm.state !== 'cancelled' && sm.state !== 'error' && sm.state !== 'idle') {
+      sm.pause('permission');
+    }
+
     // Build a permission card specifically for exec approval
     const cardModel = this.permissionCardBuilder.buildPermissionCard({
       toolName: 'exec',
@@ -643,6 +724,45 @@ export class CardEngineImpl implements CardEngine {
       sessionId,
       permissionRequestId: msg.call_id,
     });
+  }
+
+  private ensureTerminalCard(
+    sessionId: string,
+    chatId: string,
+    title = 'Terminal Output',
+    status?: 'running' | 'done' | 'error' | 'waiting',
+  ): string {
+    const existingCardId = this.terminalCards.get(sessionId);
+    if (existingCardId) {
+      return existingCardId;
+    }
+
+    const content: CardModel = {
+      header: {
+        title,
+        icon: '\u{1F4BB}',
+        ...(status ? { status } : {}),
+      },
+      sections: [{ type: 'markdown', content: '```\nNo terminal output yet.\n```' }],
+    };
+
+    const cardState = this.cardStore.create(chatId, 'tool', content, this.getReplyTo(sessionId));
+    cardState.metadata['activeCardKind'] = 'terminal';
+    cardState.metadata['terminalCommand'] = '';
+    cardState.metadata['terminalOutput'] = '';
+    cardState.metadata['terminalLastSummary'] = '';
+    cardState.metadata['selectedView'] = 'latest';
+    this.terminalCards.set(sessionId, cardState.cardId);
+    this.syncActiveCard(cardState.cardId);
+
+    this.correlationStore.create({
+      cardId: cardState.cardId,
+      messageId: null,
+      chatId,
+      sessionId,
+    });
+
+    return cardState.cardId;
   }
 
   private handlePatchApplyBegin(

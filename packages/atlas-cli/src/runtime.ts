@@ -3,6 +3,8 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { formatTmuxCommandError } from 'codelink-gateway';
 import { adoptTmuxRuntime, discoverTmuxSessions, findExistingTmuxRuntime, launchTmuxRuntime } from './runtimeLauncher.js';
+import { resolveLocalRuntimeTransport } from './localRuntimePlatform.js';
+import { buildLocalCodexRuntimeProxyLaunch } from './codexRuntimeProxySupport.js';
 
 const SERVER_URL =
   process.env.CODELINK_RUNTIME_SERVER_URL
@@ -89,6 +91,7 @@ function resolveCliPath(provider: RuntimeProvider): string {
 
 async function cmdStart(args: string[]): Promise<void> {
   const { provider, name } = parseStartArgs(args);
+  const localTransport = resolveLocalRuntimeTransport();
   const cliPath = resolveCliPath(provider);
   const cwd = process.env.CODELINK_RUNTIME_CWD ?? process.env.ATLAS_RUNTIME_CWD ?? process.cwd();
   const tmuxBin =
@@ -98,6 +101,26 @@ async function cmdStart(args: string[]): Promise<void> {
     ?? 'tmux';
 
   console.log('');
+  if (localTransport === 'pty') {
+    try {
+      const started = await httpJSON('POST', '/api/local-runtimes/start', {
+        provider,
+        name,
+        displayName: name || undefined,
+      });
+
+      console.log(`Started local runtime '${started.runtime.displayName}' [${provider}/${started.runtime.transport}] (id: ${started.runtime.id})`);
+      if (started.attachmentHint) {
+        console.log(`local host: ${started.attachmentHint}`);
+      }
+      console.log(`attach from chat: /attach ${started.runtime.id.slice(0, 8)}`);
+      return;
+    } catch (err) {
+      console.error(`Failed to start a local runtime: ${err}`);
+      process.exit(1);
+    }
+  }
+
   try {
     const launched = await launchTmuxRuntime({
       provider,
@@ -105,6 +128,17 @@ async function cmdStart(args: string[]): Promise<void> {
       cwd,
       cliPath,
       serverUrl: SERVER_URL,
+      ...(provider === 'codex'
+        ? {
+          commandOverride: buildLocalCodexRuntimeProxyLaunch(import.meta.url).commandString,
+          metadata: {
+            inputProtocol: 'codelink-jsonl-v1',
+            ...(buildLocalCodexRuntimeProxyLaunch(import.meta.url).env.CODEX_APPROVAL_POLICY
+              ? { codexApprovalPolicy: buildLocalCodexRuntimeProxyLaunch(import.meta.url).env.CODEX_APPROVAL_POLICY }
+              : {}),
+          },
+        }
+        : {}),
     }, {
       runCommand: async (args) => {
         const { stdout } = await execFileAsync(tmuxBin, args, {
@@ -129,6 +163,11 @@ async function cmdStart(args: string[]): Promise<void> {
 }
 
 async function cmdDiscover(): Promise<void> {
+  if (resolveLocalRuntimeTransport() !== 'tmux') {
+    console.error('tmux session discovery is unavailable on this host. Windows defaults to pty-backed local runtimes.');
+    process.exit(1);
+  }
+
   const tmuxBin =
     process.env.CODELINK_TMUX_BIN
     ?? process.env.ATLAS_TMUX_BIN
@@ -164,6 +203,11 @@ async function cmdDiscover(): Promise<void> {
 }
 
 async function cmdAdopt(args: string[]): Promise<void> {
+  if (resolveLocalRuntimeTransport() !== 'tmux') {
+    console.error('tmux session adoption is unavailable on this host. Windows defaults to pty-backed local runtimes.');
+    process.exit(1);
+  }
+
   const { provider, positional } = parseProviderArgs('adopt', args);
   const [sessionName, ...displayNameParts] = positional;
   const tmuxBin =
@@ -264,11 +308,11 @@ async function cmdDrop(name: string): Promise<void> {
 }
 
 function printHelp(): void {
-  console.log(`codelink-runtime - tmux-backed Claude/Codex runtimes visible in /list
+  console.log(`codelink-runtime - local Claude/Codex runtimes visible in /list
 
 Usage:
   codelink-runtime start [--provider claude|codex] [name]
-                              Start a tmux-backed runtime and register it
+                              Start a local runtime and register it
   codelink-runtime discover   List local tmux sessions that can be adopted
   codelink-runtime adopt [--provider claude|codex] <tmux-session> [name]
                               Register an existing tmux session without creating or killing it
@@ -287,9 +331,9 @@ Environment:
   CODELINK_RUNTIME_PROVIDER / ATLAS_RUNTIME_PROVIDER
                               Runtime provider for start (default: claude)
   CODELINK_RUNTIME_CWD / ATLAS_RUNTIME_CWD
-                              Working directory for the tmux session (default: current directory)
+                              Working directory for the local runtime (default: current directory)
   CODELINK_TMUX_BIN / ATLAS_TMUX_BIN / TMUX_BIN
-                              tmux binary path (default: tmux)
+                              tmux binary path for Unix tmux mode (default: tmux)
   CLAUDE_CLI_PATH             Path to claude CLI (default: claude)
   CODEX_CLI_PATH              Path to codex CLI (default: codex)
 `);

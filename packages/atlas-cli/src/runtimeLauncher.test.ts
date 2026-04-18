@@ -120,6 +120,46 @@ describe('launchTmuxRuntime', () => {
     });
   });
 
+  it('allows codex tmux runtimes to override the launch command and register proxy metadata', async () => {
+    const runCommand = vi.fn(async () => '');
+    const registerRuntime = vi.fn(async () => {});
+
+    const launched = await launchTmuxRuntime({
+      provider: 'codex',
+      name: 'spec-review',
+      cwd: '/work/project',
+      cliPath: 'codex',
+      serverUrl: 'http://127.0.0.1:20263',
+      commandOverride: 'node /runtime-proxy/codex-proxy.js',
+      metadata: {
+        inputProtocol: 'codelink-jsonl-v1',
+      },
+    }, {
+      runCommand,
+      registerRuntime,
+      createRuntimeId: () => 'runtime-codex-proxy-1',
+    });
+
+    expect(runCommand).toHaveBeenCalledWith([
+      'new-session',
+      '-d',
+      '-s',
+      'codelink-spec-review',
+      '-c',
+      '/work/project',
+      "node /runtime-proxy/codex-proxy.js",
+    ]);
+
+    expect(registerRuntime).toHaveBeenCalledWith(expect.objectContaining({
+      runtimeId: 'runtime-codex-proxy-1',
+      metadata: expect.objectContaining({
+        inputProtocol: 'codelink-jsonl-v1',
+      }),
+    }));
+
+    expect(launched.runtimeId).toBe('runtime-codex-proxy-1');
+  });
+
   it('discovers existing tmux session names', async () => {
     const sessions = await discoverTmuxSessions({
       runCommand: vi.fn(async () => 'claude-main\ncodex-lab\n'),

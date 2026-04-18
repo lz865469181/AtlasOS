@@ -281,14 +281,18 @@ describe('CommandRegistry', () => {
       defaultAgentId?: string;
       defaultPermissionMode?: string;
       localRuntimeManager?: {
-        startTmuxRuntime: ReturnType<typeof vi.fn>;
+        localTransport: 'tmux' | 'pty';
+        supportsTmuxSessions: boolean;
+        startLocalRuntime: ReturnType<typeof vi.fn>;
         discoverTmuxSessions: ReturnType<typeof vi.fn>;
         adoptTmuxRuntime: ReturnType<typeof vi.fn>;
       };
     }): Promise<CommandContext & {
       runtimeBridge: { cancel: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn> };
       localRuntimeManager: {
-        startTmuxRuntime: ReturnType<typeof vi.fn>;
+        localTransport: 'tmux' | 'pty';
+        supportsTmuxSessions: boolean;
+        startLocalRuntime: ReturnType<typeof vi.fn>;
         discoverTmuxSessions: ReturnType<typeof vi.fn>;
         adoptTmuxRuntime: ReturnType<typeof vi.fn>;
       };
@@ -326,7 +330,9 @@ describe('CommandRegistry', () => {
         dispose: vi.fn().mockResolvedValue(undefined),
       };
       const localRuntimeManager = overrides?.localRuntimeManager ?? {
-        startTmuxRuntime: vi.fn().mockImplementation(async ({
+        localTransport: 'tmux' as const,
+        supportsTmuxSessions: true,
+        startLocalRuntime: vi.fn().mockImplementation(async ({
           provider,
           name,
         }: {
@@ -433,7 +439,9 @@ describe('CommandRegistry', () => {
       } as CommandContext & {
         runtimeBridge: { cancel: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn> };
         localRuntimeManager: {
-          startTmuxRuntime: ReturnType<typeof vi.fn>;
+          localTransport: 'tmux' | 'pty';
+          supportsTmuxSessions: boolean;
+          startLocalRuntime: ReturnType<typeof vi.fn>;
           discoverTmuxSessions: ReturnType<typeof vi.fn>;
           adoptTmuxRuntime: ReturnType<typeof vi.fn>;
         };
@@ -649,7 +657,7 @@ describe('CommandRegistry', () => {
       const ctx = await makeContext();
       const result = registry.resolve('/new');
       const output = await result!.command.execute('', ctx);
-      expect(ctx.localRuntimeManager.startTmuxRuntime).toHaveBeenCalledWith({
+      expect(ctx.localRuntimeManager.startLocalRuntime).toHaveBeenCalledWith({
         provider: 'claude',
         name: 'main',
         binding: expect.objectContaining({ bindingId: ctx.binding.bindingId }),
@@ -695,7 +703,7 @@ describe('CommandRegistry', () => {
       const output = await result!.command.execute('', ctx);
       const runtime = ctx.runtimeRegistry.get(ctx.binding.activeRuntimeId!);
 
-      expect(ctx.localRuntimeManager.startTmuxRuntime).not.toHaveBeenCalled();
+      expect(ctx.localRuntimeManager.startLocalRuntime).not.toHaveBeenCalled();
       expect(runtime).toMatchObject({
         displayName: 'main',
         provider: 'gemini',
@@ -1152,7 +1160,7 @@ describe('CommandRegistry', () => {
       const result = registry.resolve('/tmux');
       const output = await result!.command.execute('feature-lab', ctx);
 
-      expect(ctx.localRuntimeManager.startTmuxRuntime).toHaveBeenCalledWith({
+      expect(ctx.localRuntimeManager.startLocalRuntime).toHaveBeenCalledWith({
         provider: 'claude',
         name: 'feature-lab',
         binding: expect.objectContaining({ bindingId: ctx.binding.bindingId }),
@@ -1175,7 +1183,7 @@ describe('CommandRegistry', () => {
       const result = registry.resolve('/tmux');
       const output = await result!.command.execute('--provider codex spec-review', ctx);
 
-      expect(ctx.localRuntimeManager.startTmuxRuntime).toHaveBeenCalledWith({
+      expect(ctx.localRuntimeManager.startLocalRuntime).toHaveBeenCalledWith({
         provider: 'codex',
         name: 'spec-review',
         binding: expect.objectContaining({ bindingId: ctx.binding.bindingId }),
@@ -1187,7 +1195,9 @@ describe('CommandRegistry', () => {
     it('/tmux returns install guidance when tmux is missing locally', async () => {
       const ctx = await makeContext({
         localRuntimeManager: {
-          startTmuxRuntime: vi.fn().mockRejectedValue(Object.assign(
+          localTransport: 'tmux',
+          supportsTmuxSessions: true,
+          startLocalRuntime: vi.fn().mockRejectedValue(Object.assign(
             new Error('spawn tmux ENOENT'),
             { code: 'ENOENT' },
           )),
@@ -1217,6 +1227,23 @@ describe('CommandRegistry', () => {
       expect(output).toContain('already registered as **codex-live**');
     });
 
+    it('/discover reports unsupported when local transport is not tmux', async () => {
+      const ctx = await makeContext({
+        localRuntimeManager: {
+          localTransport: 'pty',
+          supportsTmuxSessions: false,
+          startLocalRuntime: vi.fn(),
+          discoverTmuxSessions: vi.fn(),
+          adoptTmuxRuntime: vi.fn(),
+        },
+      });
+      const result = registry.resolve('/discover');
+      const output = await result!.command.execute('', ctx);
+
+      expect(ctx.localRuntimeManager.discoverTmuxSessions).not.toHaveBeenCalled();
+      expect(output).toContain('tmux session discovery is unavailable');
+    });
+
     it('/adopt registers a local tmux session and attaches this thread to it', async () => {
       const ctx = await makeContext();
       const result = registry.resolve('/adopt');
@@ -1231,6 +1258,23 @@ describe('CommandRegistry', () => {
       expect(ctx.binding.activeRuntimeId).toBe('runtime-adopt-codex-1');
       expect(output).toContain('Adopted tmux runtime: spec-review [codex/tmux]');
       expect(output).toContain('This thread is now attached to the adopted tmux runtime.');
+    });
+
+    it('/adopt reports unsupported when local transport is not tmux', async () => {
+      const ctx = await makeContext({
+        localRuntimeManager: {
+          localTransport: 'pty',
+          supportsTmuxSessions: false,
+          startLocalRuntime: vi.fn(),
+          discoverTmuxSessions: vi.fn(),
+          adoptTmuxRuntime: vi.fn(),
+        },
+      });
+      const result = registry.resolve('/adopt');
+      const output = await result!.command.execute('ops-shell', ctx);
+
+      expect(ctx.localRuntimeManager.adoptTmuxRuntime).not.toHaveBeenCalled();
+      expect(output).toContain('tmux session adoption is unavailable');
     });
   });
 

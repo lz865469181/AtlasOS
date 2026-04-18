@@ -8,6 +8,8 @@ interface SessionState {
   abortController: AbortController | null;
   agentMessageSnapshots: Map<string, string>;
   commandOutputSnapshots: Map<string, string>;
+  commandLifecycleStarted: Set<string>;
+  commandLifecycleExited: Set<string>;
 }
 
 function sanitizeEnv(source: NodeJS.ProcessEnv | Record<string, string>): Record<string, string> {
@@ -50,6 +52,10 @@ export class CodexBackend implements AgentBackend {
       ?? process.env.OPENAI_BASE_URL
       ?? opts.env?.CODEX_BASE_URL
       ?? process.env.CODEX_BASE_URL;
+    const approvalPolicy =
+      opts.env?.CODEX_APPROVAL_POLICY
+      ?? process.env.CODEX_APPROVAL_POLICY
+      ?? 'never';
 
     this.client = new Codex({
       ...(apiKey ? { apiKey } : {}),
@@ -61,7 +67,7 @@ export class CodexBackend implements AgentBackend {
     this.threadOptions = {
       workingDirectory: opts.cwd,
       skipGitRepoCheck: true,
-      approvalPolicy: 'never',
+      approvalPolicy: approvalPolicy as ThreadOptions['approvalPolicy'],
       sandboxMode: 'workspace-write',
       ...(model ? { model } : {}),
     };
@@ -82,6 +88,8 @@ export class CodexBackend implements AgentBackend {
       abortController: null,
       agentMessageSnapshots: new Map(),
       commandOutputSnapshots: new Map(),
+      commandLifecycleStarted: new Set(),
+      commandLifecycleExited: new Set(),
     });
     this.emit({ type: 'status', status: 'starting' });
     this.emit({ type: 'status', status: 'idle' });
@@ -97,6 +105,8 @@ export class CodexBackend implements AgentBackend {
     session.abortController = new AbortController();
     session.agentMessageSnapshots.clear();
     session.commandOutputSnapshots.clear();
+    session.commandLifecycleStarted.clear();
+    session.commandLifecycleExited.clear();
 
     this.emit({ type: 'status', status: 'running' });
 
@@ -152,6 +162,7 @@ export class CodexBackend implements AgentBackend {
 
   private handleEvent(session: SessionState, event: ThreadEvent): boolean {
     switch (event.type) {
+      case 'item.started':
       case 'item.updated':
       case 'item.completed':
         this.handleItem(session, event.item, event.type === 'item.completed');
@@ -185,6 +196,15 @@ export class CodexBackend implements AgentBackend {
     }
 
     if (item.type === 'command_execution') {
+      if (!session.commandLifecycleStarted.has(item.id)) {
+        this.emit({
+          type: 'command-start',
+          commandId: item.id,
+          command: item.command,
+        });
+        session.commandLifecycleStarted.add(item.id);
+      }
+
       const previous = session.commandOutputSnapshots.get(item.id) ?? '';
       const current = item.aggregated_output ?? '';
       const delta = suffixDelta(previous, current);
@@ -192,6 +212,19 @@ export class CodexBackend implements AgentBackend {
         this.emit({ type: 'terminal-output', data: delta });
       }
       session.commandOutputSnapshots.set(item.id, current);
+
+      if (
+        item.status !== 'in_progress'
+        && typeof item.exit_code === 'number'
+        && !session.commandLifecycleExited.has(item.id)
+      ) {
+        this.emit({
+          type: 'command-exit',
+          commandId: item.id,
+          exitCode: item.exit_code,
+        });
+        session.commandLifecycleExited.add(item.id);
+      }
       return;
     }
 

@@ -303,6 +303,14 @@ export class EngineImpl implements Engine {
         return this.compactSummary(message.fullText ?? message.textDelta ?? '');
       case 'terminal-output':
         return this.compactSummary(message.data);
+      case 'command-start':
+        return this.compactSummary(message.command);
+      case 'command-exit':
+        return message.exitCode === 0
+          ? 'Command finished successfully'
+          : `Command exited with code ${message.exitCode}`;
+      case 'cwd-change':
+        return this.compactSummary(message.cwd);
       case 'permission-request':
         return this.compactSummary(message.reason);
       case 'exec-approval-request':

@@ -42,6 +42,9 @@ export const AdoptCommand: Command = {
     if (!context.localRuntimeManager) {
       return 'Local tmux session adoption is unavailable on this deployment.';
     }
+    if (!context.localRuntimeManager.supportsTmuxSessions) {
+      return 'Local tmux session adoption is unavailable on this host.';
+    }
 
     const parsed = parseAdoptArgs(args, context.defaultAgentId);
     if (!parsed) {

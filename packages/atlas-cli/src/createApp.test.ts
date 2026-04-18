@@ -14,6 +14,20 @@ const expressMocks = vi.hoisted(() => ({
   }),
 }));
 
+const ptyMocks = vi.hoisted(() => ({
+  write: vi.fn(),
+  kill: vi.fn(),
+  onData: vi.fn(),
+  onExit: vi.fn(),
+  spawn: vi.fn(() => ({
+    pid: 4242,
+    write: ptyMocks.write,
+    kill: ptyMocks.kill,
+    onData: ptyMocks.onData,
+    onExit: ptyMocks.onExit,
+  })),
+}));
+
 vi.mock('express', () => ({
   default: Object.assign(
     () => ({
@@ -27,6 +41,10 @@ vi.mock('express', () => ({
       json: expressMocks.json,
     },
   ),
+}));
+
+vi.mock('node-pty', () => ({
+  spawn: ptyMocks.spawn,
 }));
 
 vi.mock('codelink-gateway', async () => {
@@ -78,6 +96,11 @@ describe('createApp', () => {
     expressMocks.delete.mockClear();
     expressMocks.use.mockClear();
     expressMocks.listen.mockClear();
+    ptyMocks.write.mockClear();
+    ptyMocks.kill.mockClear();
+    ptyMocks.onData.mockClear();
+    ptyMocks.onExit.mockClear();
+    ptyMocks.spawn.mockClear();
   });
 
   // ── Legacy AppConfig ───────────────────────────────────────────────────
@@ -211,6 +234,80 @@ describe('createApp', () => {
 
     expect(registeredGets).toContain('/api/runtimes/:runtimeId/inbox');
     expect(registeredPosts).toContain('/api/runtimes/:runtimeId/events');
+
+    await app.stop();
+  });
+
+  it('registers a local runtime start route and starts a pty-backed runtime on Windows hosts', async () => {
+    const app = createApp({
+      agentCwd: '/tmp',
+    });
+
+    await app.start();
+
+    const registeredPosts = expressMocks.post.mock.calls.map((call) => call[0]);
+    expect(registeredPosts).toContain('/api/local-runtimes/start');
+
+    const startHandler = findRouteHandler(expressMocks.post, '/api/local-runtimes/start');
+    const response = makeResponseRecorder();
+
+    await startHandler({
+      body: {
+        provider: 'claude',
+        name: 'dev-shell',
+      },
+    }, response);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toEqual(expect.objectContaining({
+      ok: true,
+      runtime: expect.objectContaining({
+        displayName: 'dev-shell',
+        provider: 'claude',
+        transport: 'pty',
+      }),
+    }));
+    expect(ptyMocks.spawn).toHaveBeenCalledWith(expect.any(String), expect.arrayContaining(['--session-id', expect.any(String)]), expect.objectContaining({
+      cwd: '/tmp',
+    }));
+
+    await app.stop();
+  });
+
+  it('starts codex local runtimes through the proxy script with JSONL prompt framing', async () => {
+    const app = createApp({
+      agentCwd: '/tmp',
+    });
+
+    await app.start();
+
+    const startHandler = findRouteHandler(expressMocks.post, '/api/local-runtimes/start');
+    const response = makeResponseRecorder();
+
+    await startHandler({
+      body: {
+        provider: 'codex',
+        name: 'codex-proxy',
+      },
+    }, response);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toEqual(expect.objectContaining({
+      ok: true,
+      runtime: expect.objectContaining({
+        displayName: 'codex-proxy',
+        provider: 'codex',
+        transport: 'pty',
+      }),
+    }));
+    expect(ptyMocks.spawn).toHaveBeenCalledWith(expect.stringContaining('node'), expect.arrayContaining([
+      expect.stringContaining('localCodexRuntimeProxy'),
+    ]), expect.objectContaining({
+      cwd: '/tmp',
+    }));
+    const spawnCalls = ptyMocks.spawn.mock.calls as unknown as Array<[string, string[], { env?: Record<string, string> }]>;
+    const spawnEnv = spawnCalls[spawnCalls.length - 1]?.[2]?.env;
+    expect(spawnEnv).not.toHaveProperty('CODEX_APPROVAL_POLICY', 'on-request');
 
     await app.stop();
   });

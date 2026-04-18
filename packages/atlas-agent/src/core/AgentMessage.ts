@@ -53,6 +53,24 @@ export interface TerminalOutputMessage {
   data: string;
 }
 
+export interface CommandStartMessage {
+  type: 'command-start';
+  commandId: string;
+  command: string;
+  cwd?: string;
+}
+
+export interface CommandExitMessage {
+  type: 'command-exit';
+  commandId: string;
+  exitCode: number;
+}
+
+export interface CwdChangeMessage {
+  type: 'cwd-change';
+  cwd: string;
+}
+
 export interface EventMessage {
   type: 'event';
   name: string;
@@ -94,6 +112,9 @@ export type AgentMessage =
   | PermissionResponseMessage
   | FsEditMessage
   | TerminalOutputMessage
+  | CommandStartMessage
+  | CommandExitMessage
+  | CwdChangeMessage
   | EventMessage
   | TokenCountMessage
   | ExecApprovalRequestMessage

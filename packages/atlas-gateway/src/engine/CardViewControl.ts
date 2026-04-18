@@ -92,9 +92,14 @@ export function renderActiveCardView(state: CardState, view: CardViewMode): {
     const command = String(state.metadata['terminalCommand'] ?? '');
     const output = String(state.metadata['terminalOutput'] ?? '');
     const lastLine = String(state.metadata['terminalLastSummary'] ?? '');
+    const cwd = String(state.metadata['terminalCwd'] ?? '');
+    const exitCode = state.metadata['terminalExitCode'];
     const latestSections: CardSection[] = [];
     if (command) {
       latestSections.push({ type: 'markdown', content: `\`\`\`shell\n${command}\n\`\`\`` });
+    }
+    if (cwd) {
+      latestSections.push({ type: 'note', content: `cwd: ${cwd}` });
     }
     latestSections.push({
       type: 'markdown',
@@ -107,6 +112,9 @@ export function renderActiveCardView(state: CardState, view: CardViewMode): {
         fields: [
           { label: 'Card', value: 'terminal', short: true },
           { label: 'Status', value: state.content.header?.status ?? state.status, short: true },
+          { label: 'Command', value: command || '-', short: true },
+          { label: 'CWD', value: cwd || '-', short: true },
+          { label: 'Exit', value: exitCode == null ? '-' : String(exitCode), short: true },
           { label: 'Chars', value: String(output.length), short: true },
         ],
       },

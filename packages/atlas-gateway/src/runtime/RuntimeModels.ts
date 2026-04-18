@@ -11,12 +11,12 @@ export interface RuntimeSession {
   id: string;
   source: 'atlas-managed' | 'external' | 'remote';
   provider: 'claude' | 'codex' | 'gemini' | 'custom';
-  transport: 'sdk' | 'acp' | 'mcp' | 'websocket' | 'bridge' | 'tmux';
+  transport: 'sdk' | 'acp' | 'mcp' | 'websocket' | 'bridge' | 'tmux' | 'pty';
   status: 'starting' | 'running' | 'idle' | 'paused' | 'error' | 'stopped';
   displayName?: string;
   workspaceId?: string;
   projectId?: string;
-  resumeHandle?: { kind: 'claude-session' | 'tmux-session' | 'remote-runtime'; value: string };
+  resumeHandle?: { kind: 'claude-session' | 'tmux-session' | 'remote-runtime' | 'local-process'; value: string };
   capabilities: RuntimeCapabilities;
   metadata: Record<string, string>;
   createdAt: number;

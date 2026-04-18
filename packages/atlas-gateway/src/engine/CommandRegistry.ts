@@ -6,7 +6,9 @@ import type { RuntimeRegistryImpl } from '../runtime/RuntimeRegistry.js';
 import type { RuntimeBridgeImpl } from '../runtime/RuntimeBridge.js';
 
 export interface LocalRuntimeManager {
-  startTmuxRuntime(opts: {
+  localTransport: 'tmux' | 'pty';
+  supportsTmuxSessions: boolean;
+  startLocalRuntime(opts: {
     provider: 'claude' | 'codex';
     name: string;
     displayName?: string;
@@ -14,8 +16,9 @@ export interface LocalRuntimeManager {
     binding: ConversationBinding;
   }): Promise<{
     runtime: RuntimeSession;
-    sessionName: string;
-    tmuxTarget: string;
+    sessionName?: string;
+    tmuxTarget?: string;
+    attachmentHint?: string;
   }>;
   discoverTmuxSessions(opts: {
     binding: ConversationBinding;

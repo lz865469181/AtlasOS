@@ -321,6 +321,33 @@ describe('Engine', () => {
       expect(lastSender().sendText).not.toHaveBeenCalled();
     });
 
+    it('stores the active command summary for a watching runtime', async () => {
+      const { factory, lastSender } = mockSenderFactory();
+      const bindingStore = new BindingStoreImpl();
+      const binding = bindingStore.getOrCreate('ch-1', 'chat-1', 'chat-1');
+      bindingStore.attach(binding.bindingId, 'runtime-watch-1');
+      bindingStore.setWatching(binding.bindingId, 'runtime-watch-1');
+
+      deps = createDeps({
+        bindingStore,
+        senderFactory: factory,
+      });
+      engine = new EngineImpl(deps);
+
+      await engine.handleRuntimeMessage('runtime-watch-1', {
+        type: 'command-start',
+        commandId: 'cmd-1',
+        command: 'npm test',
+        cwd: '/repo',
+      });
+
+      expect(binding.watchState['runtime-watch-1']).toMatchObject({
+        unreadCount: 1,
+        lastSummary: 'npm test',
+      });
+      expect(lastSender().sendCard).not.toHaveBeenCalled();
+    });
+
     it('notifies the thread when a watching runtime completes', async () => {
       const { factory, lastSender } = mockSenderFactory();
       const bindingStore = new BindingStoreImpl();

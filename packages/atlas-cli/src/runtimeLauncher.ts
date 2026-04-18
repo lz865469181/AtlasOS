@@ -24,6 +24,8 @@ export interface LaunchTmuxRuntimeOptions {
   cwd: string;
   cliPath: string;
   serverUrl: string;
+  commandOverride?: string;
+  metadata?: Record<string, string>;
 }
 
 export interface AdoptTmuxRuntimeOptions {
@@ -86,6 +88,7 @@ function buildPayload(opts: {
   tmuxTarget: string;
   tmuxManaged: 'true' | 'false';
   cwd?: string;
+  metadata?: Record<string, string>;
 }): RuntimeRegistrationPayload {
   return {
     runtimeId: opts.runtimeId,
@@ -110,6 +113,7 @@ function buildPayload(opts: {
       tmuxTarget: opts.tmuxTarget,
       ...(opts.cwd ? { cwd: opts.cwd } : {}),
       ...(opts.tmuxManaged === 'false' ? { tmuxAdopted: 'true' } : {}),
+      ...(opts.metadata ?? {}),
     },
   };
 }
@@ -153,7 +157,7 @@ export async function launchTmuxRuntime(
     sessionName,
     '-c',
     opts.cwd,
-    buildRuntimeCommand(opts.provider, opts.cliPath, runtimeId),
+    opts.commandOverride ?? buildRuntimeCommand(opts.provider, opts.cliPath, runtimeId),
   ]);
 
   await deps.registerRuntime(buildPayload({
@@ -164,6 +168,7 @@ export async function launchTmuxRuntime(
     tmuxTarget,
     tmuxManaged: 'true',
     cwd: opts.cwd,
+    metadata: opts.metadata,
   }));
 
   return {

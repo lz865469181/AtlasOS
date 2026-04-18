@@ -1,11 +1,13 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import type { AgentMessage, StatusMessage, TerminalOutputMessage } from 'codelink-agent';
+import type { AgentMessage } from 'codelink-agent';
 import type { CardEngineImpl } from '../../engine/CardEngine.js';
 import type { RuntimeAdapter, RuntimePrompt } from '../RuntimeAdapter.js';
 import type { RuntimeSession } from '../RuntimeModels.js';
 import type { RuntimeRegistryImpl } from '../RuntimeRegistry.js';
 import { formatTmuxCommandError } from '../TmuxDependency.js';
+import { encodeRuntimePermissionResponse, encodeRuntimePrompt } from './RuntimeInputEncoding.js';
+import { TerminalEventParser } from './TerminalEventParser.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -20,6 +22,7 @@ export interface TmuxRuntimeAdapterDeps {
 interface TmuxRuntimeState {
   poller: ReturnType<typeof setInterval> | null;
   lastCapture: string;
+  parser: TerminalEventParser;
   lastPromptContext?: {
     chatId: string;
     messageId: string;
@@ -125,7 +128,7 @@ export class TmuxRuntimeAdapter implements RuntimeAdapter {
     });
 
     const target = this.tmuxTarget(runtime);
-    await this.commandRunner(['set-buffer', '--', prompt.text]);
+    await this.commandRunner(['set-buffer', '--', encodeRuntimePrompt(runtime, prompt.text)]);
     await this.commandRunner(['paste-buffer', '-t', target]);
     await this.commandRunner(['send-keys', '-t', target, 'Enter']);
   }
@@ -134,6 +137,26 @@ export class TmuxRuntimeAdapter implements RuntimeAdapter {
     await this.commandRunner(['send-keys', '-t', this.tmuxTarget(runtime), 'C-c']);
     this.runtimeRegistry?.update(runtime.id, {
       status: 'idle',
+      lastActiveAt: Date.now(),
+    });
+  }
+
+  async respondToPermission(runtime: RuntimeSession, requestId: string, approved: boolean): Promise<void> {
+    const frame = encodeRuntimePermissionResponse(runtime, requestId, approved);
+    if (!frame) {
+      return;
+    }
+
+    const state = await this.ensureState(runtime);
+    if (!state.poller) {
+      await this.start(runtime);
+    }
+
+    const target = this.tmuxTarget(runtime);
+    await this.commandRunner(['set-buffer', '--', frame]);
+    await this.commandRunner(['paste-buffer', '-t', target]);
+    await this.commandRunner(['send-keys', '-t', target, 'Enter']);
+    this.runtimeRegistry?.update(runtime.id, {
       lastActiveAt: Date.now(),
     });
   }
@@ -165,6 +188,7 @@ export class TmuxRuntimeAdapter implements RuntimeAdapter {
     const created: TmuxRuntimeState = {
       poller: null,
       lastCapture: '',
+      parser: new TerminalEventParser(),
       active: false,
       lastOutputAt: Date.now(),
     };
@@ -184,10 +208,16 @@ export class TmuxRuntimeAdapter implements RuntimeAdapter {
 
     if (delta) {
       state.lastOutputAt = Date.now();
-      this.emit(runtime, {
-        type: 'terminal-output',
-        data: delta,
-      });
+      const parsed = state.parser.parse(delta);
+      for (const message of parsed.messages) {
+        this.emit(runtime, message);
+      }
+      if (parsed.output) {
+        this.emit(runtime, {
+          type: 'terminal-output',
+          data: parsed.output,
+        });
+      }
       return;
     }
 
@@ -205,21 +235,35 @@ export class TmuxRuntimeAdapter implements RuntimeAdapter {
     return this.commandRunner(['capture-pane', '-p', '-t', this.tmuxTarget(runtime)]);
   }
 
-  private emit(runtime: RuntimeSession, msg: StatusMessage | TerminalOutputMessage): void {
+  private emit(runtime: RuntimeSession, msg: AgentMessage): void {
     this.runtimeRegistry?.update(runtime.id, this.runtimePatchForMessage(msg));
 
     const state = this.states.get(runtime.id);
     const chatId = state?.lastPromptContext?.chatId;
-    if (chatId && msg.type === 'terminal-output') {
+    if (chatId && msg.type !== 'status') {
       this.cardEngine.handleMessage(runtime.id, chatId, msg);
     }
     this.handler?.(runtime.id, msg);
   }
 
-  private runtimePatchForMessage(msg: StatusMessage | TerminalOutputMessage): Partial<RuntimeSession> {
+  private runtimePatchForMessage(msg: AgentMessage): Partial<RuntimeSession> {
     if (msg.type === 'status') {
       return {
         status: msg.status,
+        lastActiveAt: Date.now(),
+      };
+    }
+
+    if (msg.type === 'command-start') {
+      return {
+        status: 'running',
+        lastActiveAt: Date.now(),
+      };
+    }
+
+    if (msg.type === 'permission-request' || msg.type === 'exec-approval-request') {
+      return {
+        status: 'paused',
         lastActiveAt: Date.now(),
       };
     }

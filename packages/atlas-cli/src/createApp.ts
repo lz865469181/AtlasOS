@@ -4,10 +4,13 @@ import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import path from 'node:path';
+import { spawn as spawnPty } from 'node-pty';
 import { agentRegistry } from 'codelink-agent';
 import type { AgentMessage } from 'codelink-agent';
 import { adoptTmuxRuntime, discoverTmuxSessions, findExistingTmuxRuntime, launchTmuxRuntime } from './runtimeLauncher.js';
 import { materializeFeishuAttachmentPrompt } from './feishuAttachmentMaterializer.js';
+import { resolveLocalRuntimeTransport, supportsReusableTmuxSessions } from './localRuntimePlatform.js';
+import { buildLocalCodexRuntimeProxyLaunch } from './codexRuntimeProxySupport.js';
 import {
   BindingStoreImpl,
   CardEngineImpl,
@@ -18,6 +21,7 @@ import {
   DingTalkCardRenderer,
   DingTalkChannelSender,
   DingTalkClientImpl,
+  PtyRuntimeAdapter,
   TmuxRuntimeAdapter,
   EngineImpl,
   FeishuAdapter,
@@ -41,6 +45,7 @@ import type {
   CodeLinkConfig,
   CardActionEvent,
   ChannelAdapter,
+  ConversationBinding,
   DingTalkClient,
   LarkClient,
   RuntimeCapabilities,
@@ -127,8 +132,40 @@ function resolveRuntimeCliPath(provider: 'claude' | 'codex'): string {
   return value.replace(/^"|"$/g, '');
 }
 
+function createSystemBinding(): ConversationBinding {
+  const now = Date.now();
+  return {
+    bindingId: 'local-runtime-api',
+    channelId: 'system',
+    chatId: 'system',
+    threadKey: 'system',
+    activeRuntimeId: null,
+    watchRuntimeId: null,
+    watchRuntimeIds: [],
+    attachedRuntimeIds: [],
+    watchState: {},
+    defaultRuntimeId: null,
+    createdAt: now,
+    lastActiveAt: now,
+  };
+}
+
+function parseJsonArray(value: string | undefined): string[] {
+  if (!value) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.map((entry) => String(entry)) : [];
+  } catch {
+    return [];
+  }
+}
+
 export function createApp(config: AppConfig | CodeLinkConfig | AtlasConfig): App {
   const normalized = normalizeConfig(config);
+  const localTransport = resolveLocalRuntimeTransport();
+  const tmuxSessionsSupported = supportsReusableTmuxSessions();
 
   const cardStore = new CardStateStoreImpl();
   const correlationStore = new MessageCorrelationStoreImpl(cardStore);
@@ -228,6 +265,30 @@ export function createApp(config: AppConfig | CodeLinkConfig | AtlasConfig): App
     cardEngine,
     runtimeRegistry,
   });
+  const ptyAdapter = new PtyRuntimeAdapter({
+    cardEngine,
+    runtimeRegistry,
+    spawnTerminal: (runtime) => {
+      const cwd =
+        runtime.metadata.cwd
+        || process.env.CODELINK_RUNTIME_CWD
+        || process.env.ATLAS_RUNTIME_CWD
+        || normalized.agentCwd;
+      const command = runtime.metadata.ptyCommand || resolveRuntimeCliPath(runtime.provider as 'claude' | 'codex');
+      const args = parseJsonArray(runtime.metadata.ptyArgs);
+      const env = {
+        ...process.env,
+        ...normalized.agentEnv,
+        ...(runtime.metadata.codexApprovalPolicy ? { CODEX_APPROVAL_POLICY: runtime.metadata.codexApprovalPolicy } : {}),
+      };
+
+      return spawnPty(command, args, {
+        name: process.env.TERM ?? 'xterm-256color',
+        cwd,
+        env,
+      });
+    },
+  });
   const tmuxAdapter = new TmuxRuntimeAdapter({
     cardEngine,
     runtimeRegistry,
@@ -239,6 +300,9 @@ export function createApp(config: AppConfig | CodeLinkConfig | AtlasConfig): App
       resolve(runtime: RuntimeSession) {
         if (runtime.transport === 'tmux') {
           return tmuxAdapter;
+        }
+        if (runtime.transport === 'pty') {
+          return ptyAdapter;
         }
         if (runtime.source === 'external' || runtime.transport === 'bridge') {
           return externalAdapter;
@@ -271,7 +335,59 @@ export function createApp(config: AppConfig | CodeLinkConfig | AtlasConfig): App
   });
 
   const localRuntimeManager: LocalRuntimeManager = {
-    startTmuxRuntime: async ({ provider, name, displayName, sessionName }) => {
+    localTransport,
+    supportsTmuxSessions: tmuxSessionsSupported,
+    startLocalRuntime: async ({ provider, name, displayName, sessionName }) => {
+      if (localTransport === 'pty') {
+        const cwd =
+          process.env.CODELINK_RUNTIME_CWD
+          ?? process.env.ATLAS_RUNTIME_CWD
+          ?? normalized.agentCwd;
+        const cliPath = resolveRuntimeCliPath(provider);
+        const runtimeId = randomUUID();
+        const label = (displayName ?? name).trim() || provider;
+        const proxyLaunch = provider === 'codex'
+          ? buildLocalCodexRuntimeProxyLaunch(import.meta.url)
+          : null;
+        const command = proxyLaunch?.command ?? cliPath;
+        const args = proxyLaunch?.args ?? (provider === 'claude'
+          ? ['--session-id', runtimeId]
+          : []);
+        const runtime = await registerExternalRuntime({
+          runtimeId,
+          source: 'external',
+          provider,
+          transport: 'pty',
+          displayName: label,
+          resumeHandle: { kind: 'local-process', value: runtimeId },
+          capabilities: {
+            streaming: true,
+            permissionCards: false,
+            fileAccess: true,
+            imageInput: false,
+            terminalOutput: true,
+            patchEvents: false,
+          },
+          metadata: {
+            agentId: provider,
+            launcher: 'codelink-runtime',
+            localTransport: 'pty',
+            cwd,
+            ptyCommand: command,
+            ptyArgs: JSON.stringify(args),
+            ...(proxyLaunch ? { inputProtocol: 'codelink-jsonl-v1' } : {}),
+            ...(proxyLaunch?.env.CODEX_APPROVAL_POLICY
+              ? { codexApprovalPolicy: proxyLaunch.env.CODEX_APPROVAL_POLICY }
+              : {}),
+          },
+        });
+        await ptyAdapter.start(runtime);
+        return {
+          runtime,
+          attachmentHint: 'Hosted by the bridge service process',
+        };
+      }
+
       const tmuxBin =
         process.env.CODELINK_TMUX_BIN
         ?? process.env.ATLAS_TMUX_BIN
@@ -292,6 +408,17 @@ export function createApp(config: AppConfig | CodeLinkConfig | AtlasConfig): App
         cwd,
         cliPath,
         serverUrl: 'local://createApp',
+        ...(provider === 'codex'
+          ? {
+            commandOverride: buildLocalCodexRuntimeProxyLaunch(import.meta.url).commandString,
+            metadata: {
+              inputProtocol: 'codelink-jsonl-v1',
+              ...(buildLocalCodexRuntimeProxyLaunch(import.meta.url).env.CODEX_APPROVAL_POLICY
+                ? { codexApprovalPolicy: buildLocalCodexRuntimeProxyLaunch(import.meta.url).env.CODEX_APPROVAL_POLICY }
+                : {}),
+            },
+          }
+          : {}),
       }, {
         runCommand: async (args) => {
           const { stdout } = await execFileAsync(tmuxBin, args, {
@@ -322,9 +449,13 @@ export function createApp(config: AppConfig | CodeLinkConfig | AtlasConfig): App
         runtime: registeredRuntime,
         sessionName: launched.sessionName,
         tmuxTarget: launched.tmuxTarget,
+        attachmentHint: `${tmuxBin} attach -t ${launched.sessionName}`,
       };
     },
     discoverTmuxSessions: async () => {
+      if (!tmuxSessionsSupported) {
+        throw new Error('Local tmux session discovery is unavailable on this host.');
+      }
       const tmuxBin =
         process.env.CODELINK_TMUX_BIN
         ?? process.env.ATLAS_TMUX_BIN
@@ -356,6 +487,9 @@ export function createApp(config: AppConfig | CodeLinkConfig | AtlasConfig): App
       }));
     },
     adoptTmuxRuntime: async ({ provider, sessionName, displayName }) => {
+      if (!tmuxSessionsSupported) {
+        throw new Error('Local tmux session adoption is unavailable on this host.');
+      }
       const tmuxBin =
         process.env.CODELINK_TMUX_BIN
         ?? process.env.ATLAS_TMUX_BIN
@@ -500,6 +634,7 @@ export function createApp(config: AppConfig | CodeLinkConfig | AtlasConfig): App
   };
   managedAdapter.onMessage(runtimeMessageHandler);
   externalAdapter.onMessage(runtimeMessageHandler);
+  ptyAdapter.onMessage(runtimeMessageHandler);
   tmuxAdapter.onMessage(runtimeMessageHandler);
 
   const messageHandler = (event: Parameters<typeof engine.handleChannelEvent>[0]) =>
@@ -619,6 +754,43 @@ export function createApp(config: AppConfig | CodeLinkConfig | AtlasConfig): App
               transport: runtime.transport,
               displayName: runtime.displayName,
             },
+          });
+        } catch (err) {
+          res.status(500).json({ error: String(err) });
+        }
+      });
+
+      apiApp.post('/api/local-runtimes/start', async (req, res) => {
+        try {
+          const provider = req.body?.provider;
+          const name = typeof req.body?.name === 'string' ? req.body.name : '';
+          const displayName = typeof req.body?.displayName === 'string' ? req.body.displayName : undefined;
+          const sessionName = typeof req.body?.sessionName === 'string' ? req.body.sessionName : undefined;
+
+          if (provider !== 'claude' && provider !== 'codex') {
+            res.status(400).json({ error: 'provider must be claude or codex' });
+            return;
+          }
+
+          const started = await localRuntimeManager.startLocalRuntime({
+            provider,
+            name,
+            displayName,
+            sessionName,
+            binding: createSystemBinding(),
+          });
+
+          res.json({
+            ok: true,
+            runtime: {
+              id: started.runtime.id,
+              displayName: started.runtime.displayName,
+              provider: started.runtime.provider,
+              transport: started.runtime.transport,
+            },
+            sessionName: started.sessionName,
+            tmuxTarget: started.tmuxTarget,
+            attachmentHint: started.attachmentHint,
           });
         } catch (err) {
           res.status(500).json({ error: String(err) });

@@ -7,6 +7,9 @@ export const DiscoverCommand: Command = {
     if (!context.localRuntimeManager) {
       return 'Local tmux session discovery is unavailable on this deployment.';
     }
+    if (!context.localRuntimeManager.supportsTmuxSessions) {
+      return 'Local tmux session discovery is unavailable on this host.';
+    }
 
     const sessions = await context.localRuntimeManager.discoverTmuxSessions({
       binding: context.binding,

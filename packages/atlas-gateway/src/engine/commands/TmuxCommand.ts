@@ -40,6 +40,9 @@ export const TmuxCommand: Command = {
     if (!context.localRuntimeManager) {
       return 'Local tmux runtime creation is unavailable on this deployment.';
     }
+    if (context.localRuntimeManager.localTransport !== 'tmux') {
+      return 'Local tmux runtime creation is unavailable on this host. Use /new to start the default local runtime instead.';
+    }
 
     const parsed = parseTmuxArgs(args);
     if (!parsed) {
@@ -48,7 +51,7 @@ export const TmuxCommand: Command = {
 
     let started;
     try {
-      started = await context.localRuntimeManager.startTmuxRuntime({
+      started = await context.localRuntimeManager.startLocalRuntime({
         provider: parsed.provider,
         name: parsed.name,
         binding: context.binding,
@@ -68,7 +71,7 @@ export const TmuxCommand: Command = {
     const label = started.runtime.displayName ?? started.runtime.id.slice(0, 8);
     return [
       `Started tmux runtime: ${label} [${started.runtime.provider}/${started.runtime.transport}]`,
-      `Local attach: tmux attach -t ${started.sessionName}`,
+      `Local attach: ${started.attachmentHint ?? `tmux attach -t ${started.sessionName}`}`,
       'This thread is now attached to the new tmux runtime.',
     ].join('\n');
   },

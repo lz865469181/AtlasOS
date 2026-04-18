@@ -22,6 +22,9 @@ import type {
   ExecApprovalRequestMessage,
   PatchApplyBeginMessage,
   PatchApplyEndMessage,
+  CommandStartMessage,
+  CommandExitMessage,
+  CwdChangeMessage,
 } from 'codelink-agent';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -451,6 +454,38 @@ describe('CardEngine', () => {
     });
   });
 
+  describe('command lifecycle', () => {
+    it('creates and updates a terminal card from command lifecycle messages', () => {
+      engine.handleMessage(SESSION, CHAT, {
+        type: 'command-start',
+        commandId: 'cmd-1',
+        command: 'npm test',
+        cwd: '/repo',
+      } as CommandStartMessage);
+      engine.handleMessage(SESSION, CHAT, {
+        type: 'cwd-change',
+        cwd: '/repo/packages/gateway',
+      } as CwdChangeMessage);
+      engine.handleMessage(SESSION, CHAT, {
+        type: 'terminal-output',
+        data: 'running tests',
+      } as TerminalOutputMessage);
+      engine.handleMessage(SESSION, CHAT, {
+        type: 'command-exit',
+        commandId: 'cmd-1',
+        exitCode: 1,
+      } as CommandExitMessage);
+
+      const cards = deps.cardStore.getActiveByChatId(CHAT);
+      const termCard = cards.find((c) => c.type === 'tool');
+      expect(termCard).toBeDefined();
+      expect(termCard!.metadata['terminalCommand']).toBe('npm test');
+      expect(termCard!.metadata['terminalCwd']).toBe('/repo/packages/gateway');
+      expect(termCard!.metadata['terminalExitCode']).toBe(1);
+      expect(termCard!.content.header?.status).toBe('error');
+    });
+  });
+
   // ── event ───────────────────────────────────────────────────────────────
 
   describe('event', () => {
@@ -550,6 +585,20 @@ describe('CardEngine', () => {
 
       const entry = deps.correlationStore.getByPermissionId(SESSION, 'exec-2');
       expect(entry).toBeDefined();
+    });
+
+    it('pauses streaming when exec approval is requested', () => {
+      engine.handleMessage(SESSION, CHAT, { type: 'model-output', textDelta: 'Text' } as ModelOutputMessage);
+      const sm = engine.getStreamingState(SESSION);
+      expect(sm!.state).not.toBe('paused');
+
+      engine.handleMessage(SESSION, CHAT, {
+        type: 'exec-approval-request',
+        call_id: 'exec-3',
+      } as ExecApprovalRequestMessage);
+
+      expect(sm!.state).toBe('paused');
+      expect(sm!.pauseReason).toBe('permission');
     });
   });
 

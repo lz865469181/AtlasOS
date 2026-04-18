@@ -156,4 +156,130 @@ describe('CodexBackend', () => {
       workingDirectory: '/repo',
     }));
   });
+
+  it('honors an explicit approval policy from env overrides', async () => {
+    const backend = new CodexBackend({
+      cwd: '/repo',
+      env: {
+        OPENAI_API_KEY: 'sdk-key',
+        CODEX_APPROVAL_POLICY: 'on-request',
+      },
+    });
+    collectMessages(backend);
+
+    await backend.startSession();
+
+    expect(startThread).toHaveBeenCalledWith(expect.objectContaining({
+      approvalPolicy: 'on-request',
+    }));
+  });
+
+  it('emits command lifecycle messages from command_execution items', async () => {
+    startThread.mockImplementationOnce(() => ({
+      runStreamed: vi.fn(async () => ({
+        events: streamFrom([
+          {
+            type: 'item.updated',
+            item: {
+              id: 'cmd-1',
+              type: 'command_execution',
+              command: 'npm test',
+              aggregated_output: 'running tests\n',
+              status: 'in_progress',
+            },
+          },
+          {
+            type: 'item.completed',
+            item: {
+              id: 'cmd-1',
+              type: 'command_execution',
+              command: 'npm test',
+              aggregated_output: 'running tests\n',
+              exit_code: 1,
+              status: 'failed',
+            },
+          },
+          { type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 2 } },
+        ]),
+      })),
+    }));
+
+    const backend = new CodexBackend({ cwd: '/repo', env: { OPENAI_API_KEY: 'test-key' } });
+    const messages = collectMessages(backend);
+    const { sessionId } = await backend.startSession();
+    messages.length = 0;
+
+    await backend.sendPrompt(sessionId, 'Run the test suite');
+
+    expect(messages).toEqual([
+      { type: 'status', status: 'running' },
+      { type: 'command-start', commandId: 'cmd-1', command: 'npm test' },
+      { type: 'terminal-output', data: 'running tests\n' },
+      { type: 'command-exit', commandId: 'cmd-1', exitCode: 1 },
+      { type: 'status', status: 'idle' },
+    ]);
+  });
+
+  it('emits command start as soon as a command_execution item starts', async () => {
+    startThread.mockImplementationOnce(() => ({
+      runStreamed: vi.fn(async () => ({
+        events: streamFrom([
+          {
+            type: 'item.started',
+            item: {
+              id: 'cmd-1',
+              type: 'command_execution',
+              command: 'npm test',
+              aggregated_output: '',
+              status: 'in_progress',
+            },
+          },
+          {
+            type: 'item.updated',
+            item: {
+              id: 'msg-1',
+              type: 'agent_message',
+              text: 'Preparing command',
+            },
+          },
+          {
+            type: 'item.completed',
+            item: {
+              id: 'msg-1',
+              type: 'agent_message',
+              text: 'Preparing command',
+            },
+          },
+          {
+            type: 'item.completed',
+            item: {
+              id: 'cmd-1',
+              type: 'command_execution',
+              command: 'npm test',
+              aggregated_output: '',
+              exit_code: 0,
+              status: 'completed',
+            },
+          },
+          { type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 2 } },
+        ]),
+      })),
+    }));
+
+    const backend = new CodexBackend({ cwd: '/repo', env: { OPENAI_API_KEY: 'test-key' } });
+    const messages = collectMessages(backend);
+    const { sessionId } = await backend.startSession();
+    messages.length = 0;
+
+    await backend.sendPrompt(sessionId, 'Run the test suite');
+
+    expect(messages).toEqual([
+      { type: 'status', status: 'running' },
+      { type: 'command-start', commandId: 'cmd-1', command: 'npm test' },
+      { type: 'model-output', textDelta: 'Preparing command' },
+      { type: 'model-output', fullText: 'Preparing command' },
+      { type: 'command-exit', commandId: 'cmd-1', exitCode: 0 },
+      { type: 'status', status: 'idle' },
+    ]);
+  });
 });

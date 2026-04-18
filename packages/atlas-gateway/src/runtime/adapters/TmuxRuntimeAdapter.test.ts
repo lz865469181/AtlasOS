@@ -44,6 +44,19 @@ function makeAdoptedRuntime(): RuntimeSession {
   };
 }
 
+function makeProxyRuntime(): RuntimeSession {
+  return {
+    ...makeRuntime(),
+    provider: 'codex',
+    metadata: {
+      tmuxSessionName: 'codex-proxy',
+      tmuxTarget: 'codex-proxy:0.0',
+      tmuxManaged: 'true',
+      inputProtocol: 'codelink-jsonl-v1',
+    },
+  };
+}
+
 describe('TmuxRuntimeAdapter', () => {
   const commandRunner = vi.fn<(...args: any[]) => Promise<string>>();
   const handleMessage = vi.fn();
@@ -148,5 +161,122 @@ describe('TmuxRuntimeAdapter', () => {
     expect(commandRunner).toHaveBeenNthCalledWith(1, ['capture-pane', '-p', '-t', 'codex-lab:2.1']);
     expect(commandRunner).not.toHaveBeenCalledWith(['kill-session', '-t', 'codex-lab']);
     expect(disposeCardEngine).toHaveBeenCalledWith('runtime-adopted-1');
+  });
+
+  it('parses tmux capture markers into structured command and permission events', async () => {
+    const runtime = makeRuntime();
+    let captureCount = 0;
+    commandRunner.mockImplementation(async (args) => {
+      if (args[0] !== 'capture-pane') {
+        return '';
+      }
+
+      captureCount += 1;
+      return captureCount === 1
+        ? ''
+        : '@@ATLAS:CMD_START:{"commandId":"cmd-1","command":"npm test","cwd":"/repo"}\n'
+          + 'running tests\n'
+          + '@@ATLAS:PERMISSION_REQUEST:{"id":"perm-1","reason":"Allow npm install?","payload":{"toolName":"shell"}}\n'
+          + '@@ATLAS:CMD_END:{"commandId":"cmd-1","exitCode":0}\n';
+    });
+    const onMessage = vi.fn();
+
+    const adapter = new TmuxRuntimeAdapter({
+      commandRunner,
+      cardEngine: {
+        handleMessage,
+        dispose: disposeCardEngine,
+      } as any,
+      runtimeRegistry: { update: runtimeUpdate } as any,
+      pollIntervalMs: 100,
+      idleAfterMs: 250,
+    });
+    adapter.onMessage(onMessage);
+
+    await adapter.sendPrompt(runtime, {
+      text: 'run tests',
+      channelId: 'feishu',
+      chatId: 'chat-1',
+      messageId: 'msg-1',
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(onMessage).toHaveBeenCalledWith('runtime-1', {
+      type: 'command-start',
+      commandId: 'cmd-1',
+      command: 'npm test',
+      cwd: '/repo',
+    });
+    expect(onMessage).toHaveBeenCalledWith('runtime-1', {
+      type: 'permission-request',
+      id: 'perm-1',
+      reason: 'Allow npm install?',
+      payload: { toolName: 'shell' },
+    });
+    expect(onMessage).toHaveBeenCalledWith('runtime-1', {
+      type: 'command-exit',
+      commandId: 'cmd-1',
+      exitCode: 0,
+    });
+    expect(handleMessage).toHaveBeenCalledWith('runtime-1', 'chat-1', {
+      type: 'terminal-output',
+      data: 'running tests\n',
+    });
+    expect(handleMessage).not.toHaveBeenCalledWith(
+      'runtime-1',
+      'chat-1',
+      expect.objectContaining({
+        data: expect.stringContaining('@@ATLAS:CMD_START'),
+      }),
+    );
+  });
+
+  it('encodes tmux prompts as JSONL frames for proxy-backed runtimes', async () => {
+    const runtime = makeProxyRuntime();
+    commandRunner.mockResolvedValue('');
+
+    const adapter = new TmuxRuntimeAdapter({
+      commandRunner,
+      cardEngine: {
+        handleMessage,
+        dispose: disposeCardEngine,
+      } as any,
+      runtimeRegistry: { update: runtimeUpdate } as any,
+      pollIntervalMs: 100,
+      idleAfterMs: 250,
+    });
+
+    await adapter.sendPrompt(runtime, {
+      text: 'line 1\nline 2',
+      channelId: 'feishu',
+      chatId: 'chat-1',
+      messageId: 'msg-1',
+    });
+
+    expect(commandRunner).toHaveBeenNthCalledWith(2, ['set-buffer', '--', '{"type":"prompt","text":"line 1\\nline 2"}']);
+  });
+
+  it('writes permission responses into tmux as JSONL frames for proxy-backed runtimes', async () => {
+    const runtime = makeProxyRuntime();
+    commandRunner.mockResolvedValue('');
+
+    const adapter = new TmuxRuntimeAdapter({
+      commandRunner,
+      cardEngine: {
+        handleMessage,
+        dispose: disposeCardEngine,
+      } as any,
+      runtimeRegistry: { update: runtimeUpdate } as any,
+      pollIntervalMs: 100,
+      idleAfterMs: 250,
+    });
+
+    await adapter.respondToPermission?.(runtime, 'perm-1', false);
+
+    expect(commandRunner).toHaveBeenNthCalledWith(1, ['capture-pane', '-p', '-t', 'codex-proxy:0.0']);
+    expect(commandRunner).toHaveBeenNthCalledWith(2, ['set-buffer', '--', '{"type":"permission-response","requestId":"perm-1","approved":false}']);
+    expect(commandRunner).toHaveBeenNthCalledWith(3, ['paste-buffer', '-t', 'codex-proxy:0.0']);
+    expect(commandRunner).toHaveBeenNthCalledWith(4, ['send-keys', '-t', 'codex-proxy:0.0', 'Enter']);
   });
 });
